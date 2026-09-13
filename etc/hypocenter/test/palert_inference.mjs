@@ -46,7 +46,7 @@ const { FindPalertHypocenter } = await load('src/classes/PalertHypoInf.js')
 const { FindNiedHypocenter } = await load('src/classes/NiedHypoInf.js')
 const { palertHypocenterProfile: profile } = await load('src/classes/PalertHypocenterProfile.js')
 const { niedHypocenterProfile: nied } = await load('src/classes/NiedHypocenterProfile.js')
-const { calcDistanceKm, calcReachTime, getPalertLevelFromPgaPgv, stampToTime, timeToStamp } = await load('src/utils/Utils.js')
+const { calcDistanceKm, calcBearingDeg, calcReachTime, getPalertLevelFromPgaPgv, stampToTime, timeToStamp } = await load('src/utils/Utils.js')
 const tables = (await load('src/utils/TravelTimes.js')).default
 const componentSource = read('src/components/components/PalertNet.vue')
 const niedComponentSource = read('src/components/components/NiedNet.vue')
@@ -1470,6 +1470,35 @@ const boundaryAdjacency = new Function('stations', 'calcDistanceKm', 'calcBearin
 )(boundaryStations, ([from], [to]) => Math.abs(to - from), ([from], [to]) => to >= from ? 0 : 180)
 assert.deepEqual(boundaryAdjacency.hypocenterAdjStations.center.map(station => station.stationId), ['center', 'atLimit'])
 console.log('PASS unchanged activation/density, three nearest inference neighbors per direction and inclusive 100 km boundary')
+
+// Run NIED's actual initialization code with sparse and dense directions.
+const buildNiedAdjacency = new Function('stationList', 'calcDistanceKm', 'calcBearingDeg', `
+    const adjStationIds = {}, adjStations4Hypo = {}, expireSeconds = {}, triggerDiffToleranceMatrix = [];
+    ${section(niedComponentSource, 'const bearingDirections =', 'let decimal =')}
+    ${section(niedComponentSource, 'const calcBearingDirection =', 'let pendingRender =')}
+    ${niedComponentSource.match(/const nearbyLength = \d+/)[0]};
+    ${section(niedComponentSource, 'let latLngs = []', 'distanceMatrix.forEach(distanceRow => {')}
+    return { detection: adjStationIds, inference: adjStations4Hypo };
+`)
+const niedNeighborCoords = [
+    [0, 0], [0.1, 0], [0.5, 0], [0.6, 0], // self, local north, second north, extra north
+    [0, 0.4], [0, 0.5], [0, 0.6], // empty east: add only its nearest two
+    [-0.1, 0], [-0.15, 0], [-0.2, 0], [-0.5, 0], // retain all three local south stations
+    [0, -2.6], [0, -2.8] // west has only one station inside 300 km
+]
+const niedDirectional = buildNiedAdjacency(niedNeighborCoords, calcDistanceKm, calcBearingDeg)
+assert.deepEqual(niedDirectional.detection[0], [0, 1, 7, 8, 9], 'NIED activation uses only its original local neighbors')
+assert.deepEqual(niedDirectional.inference[0].map(s => s.stationId).sort((a,b) => a-b), [0, 1, 2, 4, 5, 7, 8, 9, 11],
+    'Self does not count toward north; fill two nearest per direction and preserve all local neighbors')
+assert.equal(FindNiedHypocenter.calcStationDensityWeights(niedDirectional.inference)[0], 1 / Math.sqrt(5))
+assert(niedDirectional.inference[0].every(s => s.distance <= 300))
+const niedBoundary = buildNiedAdjacency([[0, 0], [300, 0], [300.001, 0]],
+    ([from], [to]) => Math.abs(to-from), ([from], [to]) => to >= from ? 0 : 180)
+assert.deepEqual(niedBoundary.inference[0].map(s => s.stationId), [0, 1], 'Include exactly 300 km and exclude points beyond it')
+assert.deepEqual(niedBoundary.detection[0], [0], 'A remote inference link cannot enter the activation neighborhood')
+assert.deepEqual(buildNiedAdjacency([[0, 0]], calcDistanceKm, calcBearingDeg).inference[0], [{stationId:0, distance:0}],
+    'Keep the station itself when all directions lack neighbors')
+console.log('PASS NIED two nearest neighbors per direction, local-density/activation preservation, sparse directions and inclusive 300 km boundary')
 
 globalThis.__palertDisplayDeps = {
     settingsStore: { mainSettings: { displaySeisNet: { palertHypoInfAlwaysOn: false } }, effectivePalertHypoInfTextInfo: 1 },

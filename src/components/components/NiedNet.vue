@@ -74,6 +74,7 @@ const triggerCompatibilityConfig = {
 }
 const triggerDiffToleranceMatrix = [[]]
 const bearingDirections = ['N', 'E', 'S', 'W']
+const minHypocenterNeighborsPerDirection = 2
 let decimal = [0, 0]
 const activeStations = computed(() => stations.filter(station => station.isActive))
 const grids = computed(()=>{
@@ -674,23 +675,23 @@ const fetchStationList = async () => {
                 }
                 nearbyDistances.splice(nearbyLength)
                 adjStationIds[i] = nearbyDistances.map(obj => obj.id)
-                const hypoDirectionSet = new Set()
+                const hypoDirectionCounts = Object.fromEntries(bearingDirections.map(direction => [direction, 0]))
                 const hypoDistances = sortedDistances.filter(obj => {
                     if(obj.distance > 30) return false
                     if(obj.id === i) return true
                     const direction = calcBearingDirection(latLngs[i], latLngs[obj.id])
-                    if(direction) hypoDirectionSet.add(direction)
+                    if(direction) hypoDirectionCounts[direction]++
                     return true
                 })
                 sortedDistances
                     .filter(obj => obj.distance > 30 && obj.distance <= 300)
                     .some(obj => {
-                        if(hypoDirectionSet.size >= bearingDirections.length) return true
+                        if(bearingDirections.every(direction => hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection)) return true
                         const direction = calcBearingDirection(latLngs[i], latLngs[obj.id])
-                        if(!direction || hypoDirectionSet.has(direction)) return false
+                        if(!direction || hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection) return false
                         hypoDistances.push(obj)
-                        hypoDirectionSet.add(direction)
-                        return hypoDirectionSet.size >= bearingDirections.length
+                        hypoDirectionCounts[direction]++
+                        return bearingDirections.every(direction => hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection)
                     })
                 adjStations4Hypo[i] = hypoDistances.map(obj => ({
                     stationId: obj.id,
