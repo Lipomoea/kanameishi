@@ -47,6 +47,24 @@ const { FindNiedHypocenter } = await load('src/classes/NiedHypoInf.js')
 const { palertHypocenterProfile: profile } = await load('src/classes/PalertHypocenterProfile.js')
 const { niedHypocenterProfile: nied } = await load('src/classes/NiedHypocenterProfile.js')
 const { calcDistanceKm, calcBearingDeg, calcReachTime, getPalertLevelFromPgaPgv, stampToTime, timeToStamp } = await load('src/utils/Utils.js')
+for(const [pga, expectedLevel] of [[24.999, 13], [25, 14], [43.999, 14], [44, 15], [79.999, 15]]) {
+    for(const pgv of [null, 0, 15, 30, 50, 80, 140, 300]) {
+        assert.equal(getPalertLevelFromPgaPgv(pga, pgv), expectedLevel, `PGA ${pga} must ignore PGV ${pgv} below 80`)
+    }
+}
+for(const pga of [80, 300]) {
+    for(const [pgv, expectedLevel] of [
+        [null, 15], [NaN, 15], [-1, 15], [Infinity, 15], [0, 15], [14.999, 15],
+        [15, 16], [29.999, 16], [30, 17], [49.999, 17], [50, 18], [79.999, 18],
+        [80, 19], [139.999, 19], [140, 20]
+    ]) {
+        assert.equal(getPalertLevelFromPgaPgv(pga, pgv), expectedLevel, `PGA ${pga}, PGV ${pgv}`)
+    }
+}
+for(const pga of [null, NaN, -1, Infinity]) {
+    assert.equal(getPalertLevelFromPgaPgv(pga, 140), -1, 'PGV cannot replace invalid PGA')
+}
+console.log('PASS P-Alert PGA gate, intensity-four boundaries, PGV thresholds and missing-data fallback')
 const tables = (await load('src/utils/TravelTimes.js')).default
 const componentSource = read('src/components/components/PalertNet.vue')
 const niedComponentSource = read('src/components/components/NiedNet.vue')
@@ -229,10 +247,19 @@ for(const name of ['Palert', 'Nied', 'Trem']) {
         assert.equal(p.queue.entries.length, 0)
     }
 }
+for(const pga of [25, 44, 79.999]) {
+    const p = requestProbe('Palert'), base = 1788880000000
+    const frame = p.fetch()
+    p.pending[0].resolve(p.response(base, pga)); await Promise.resolve(); await Promise.resolve()
+    assert.equal(p.pending.length, 1, `PGA ${pga} must not request PGV below 80`)
+    await frame
+    assert.equal(p.committed.length, 1)
+    assert.equal(p.committed[0].pgvData, null)
+}
 {
     const p = requestProbe('Palert'), base = 1788880000000
     const a = p.fetch(); p.setTime(base + 1000); const b = p.fetch()
-    p.pending[0].resolve(p.response(base, 25)); await Promise.resolve(); await Promise.resolve()
+    p.pending[0].resolve(p.response(base, 80)); await Promise.resolve(); await Promise.resolve()
     assert.deepEqual(p.pending[2].args, [1, base / 1000], 'PGV is requested for the matching PGA second')
     p.pending[1].resolve(p.response(base + 1000)); await b
     assert.equal(p.committed.length, 0, 'PGA plus pending PGV is still an unfinished frame')
@@ -353,6 +380,7 @@ const pickMetrics = station => ({
 const findPalertTrigger = (recentData, isActive) => pickMetrics(replayPalertHistory(recentData, isActive))
 const stamp = 1788880000000
 const levelPgas = [0.05, 0.1, 0.14, 0.18, 0.25, 0.33, 0.44, 0.59, 0.8, 1.4, 2.5, 4.4, 8, 14, 25, 44]
+levelPgas.forEach((pga, level) => assert.equal(getPalertLevelFromPgaPgv(pga, 140), level, 'Existing PGA levels below 80 remain unchanged'))
 const history = levels => levels.map((level, i) => ({ level, timestamp: stamp + i * 1000, pga: level < 0 ? null : levelPgas[level] ?? 44 })).reverse()
 const quiet = Array(8).fill(3)
 const trigger = levels => findPalertTrigger(history(levels), true)
@@ -460,12 +488,12 @@ const brokenMotionTime = pgaHistory([...Array(7).fill(0.21), 0.4, 0.6])
 brokenMotionTime[1].timestamp -= 1000
 assert.equal(findPalertTrigger(brokenMotionTime, false).triggerStamp, null)
 const pgvMotion = replayPgas(Array(7).fill(0.1))
-feedPga(pgvMotion, 25, 0, 140)
+feedPga(pgvMotion, 80, 0, 140)
 assert.equal(pgvMotion.triggerStamp, null, 'The early sample alone has insufficient background')
-feedPga(pgvMotion, 44)
+feedPga(pgvMotion, 100)
 assert.equal(pgvMotion.triggerStamp, stamp + 7000)
 assert.deepEqual([pgvMotion.maxLevel, pgvMotion.secondMaxLevel, pgvMotion.triggerMaxPga, pgvMotion.triggerSecondMaxPga],
-    [20, 15, 44, 25], 'Level and PGA ranks both include the backdated sample, even when their ordering differs')
+    [20, 15, 100, 80], 'Level and PGA ranks both include the backdated sample, even when their ordering differs')
 
 const closeOnRise = (closingPga = 0.8) => replayPgas([...quietPgas, 2.5, 2.5, ...Array(7).fill(0.1), closingPga])
 const fallingOverlapStation = closeOnRise()
@@ -616,15 +644,15 @@ console.log('PASS short/long data gaps, closing timestamps, no stale-trigger rec
 // PGV can change level without changing PGA: the eighth unchanged PGA must still update the final pick.
 for(const initialPgv of [0, 140]) {
     const station = replayPgas(quietPgas)
-    feedPga(station, 44, 0, initialPgv)
-    feedPga(station, 44, 0, 0)
+    feedPga(station, 80, 0, initialPgv)
+    feedPga(station, 80, 0, 0)
     station.isActive = true
     const before = createPalertHypocenterUpdate([station])
     const firstPickId = before.pickCandidates[0].pickId
     const lifecycleFinder = new FindPalertHypocenter([], {})
     lifecycleFinder.update(before.pickCandidates, before.inactiveStations, before.activeStations)
     for(let i = 0; i < 7; i++) feedPga(station, 0.1)
-    feedPga(station, 44, 0, initialPgv === 0 ? 140 : 80)
+    feedPga(station, 80, 0, initialPgv === 0 ? 140 : 80)
     const closedAt = station.updateStamp
     const finalUpdate = createPalertHypocenterUpdate([station])
     const expectedPeaks = initialPgv === 0 ? [20, 15] : [20, 19]

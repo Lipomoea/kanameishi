@@ -450,7 +450,7 @@ const fetchRealtimeData = async () => {
         const needsPgv = Object.values(pgaResponse.dataVals)
             .some(value => {
                 const pga = normalizeMeasurement(value)
-                return pga !== null && pga >= 25
+                return pga !== null && pga >= 80
             })
         let pgvData = null
         if(needsPgv) {
