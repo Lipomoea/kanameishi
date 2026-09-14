@@ -394,7 +394,8 @@ const feedPga = (station, pga, missingSeconds = 0, pgv = null) => {
     }, missingSeconds, false)
 }
 const quietPgas = Array(8).fill(0.1)
-assert.equal(trigger([...quiet, 6]).triggerStamp, null)
+assert.equal(trigger([...quiet, 5]).triggerStamp, null)
+assert.deepEqual(trigger([...quiet, 6]), { triggerStamp: stamp + 8000, maxLevel: 6, secondMaxLevel: -1 })
 assert.deepEqual(trigger([...quiet, 7]), { triggerStamp: stamp + 8000, maxLevel: 7, secondMaxLevel: -1 })
 assert.deepEqual(trigger([...quiet, 7, 8]), { triggerStamp: stamp + 8000, maxLevel: 8, secondMaxLevel: 7 })
 assert.equal(trigger([...Array(8).fill(7), 8]).triggerStamp, null)
@@ -404,7 +405,16 @@ assert.equal(triggerPgas([...Array(8).fill(0.5), 0.59]).triggerStamp, null)
 assert.equal(triggerPgas([...Array(8).fill(0.5), 0.999]).triggerStamp, null)
 assert.equal(triggerPgas([...Array(8).fill(0.5), 1]).triggerStamp, stamp + 8000, 'The exact two-times boundary is accepted')
 assert.equal(triggerPgas([...quietPgas, 0.59]).triggerStamp, stamp + 8000)
-assert.equal(triggerPgas([...quietPgas, 0.58]).triggerStamp, null, 'The level-seven gate still applies')
+assert.equal(triggerPgas([...quietPgas, 0.44]).triggerStamp, stamp + 8000, 'The level-six boundary can trigger')
+assert.equal(triggerPgas([...quietPgas, 0.439999]).triggerStamp, null, 'A rise below level six cannot trigger')
+const levelSixOnset = replayPgas([...quietPgas, 0.44])
+assert.equal(levelSixOnset.activity, 0.1)
+assert.equal(createPalertHypocenterUpdate([levelSixOnset]).pickCandidates.length, 0, 'A level-six pick still requires activation before submission')
+levelSixOnset.isActive = true
+const levelSixPick = createPalertHypocenterUpdate([levelSixOnset]).pickCandidates[0]
+assert.equal(levelSixPick.triggerStamp, stamp + 8000)
+assert.equal(levelSixPick.maxLevel, 6)
+assert.equal(profile.getPickBaseWeight(levelSixPick), 0.1, 'Submitted level-six picks have a nonzero inference weight')
 const zeroBackgroundOnset = replayPgas([...Array(8).fill(0), 0.59])
 assert.equal(zeroBackgroundOnset.triggerStamp, stamp + 8000, 'A zero preceding sample cannot be an onset; a positive current sample can still trigger directly')
 assert.deepEqual([zeroBackgroundOnset.maxLevel, zeroBackgroundOnset.secondMaxLevel, zeroBackgroundOnset.triggerMaxPga,
@@ -435,9 +445,9 @@ const gap = history([...quiet, 10]); gap[3].timestamp -= 1000
 assert.equal(findPalertTrigger(gap, true).triggerStamp, null, 'Background timestamps must be consecutive')
 const repeated = history([...quiet, 12]); repeated.unshift({ ...repeated[0] })
 assert.equal(findPalertTrigger(repeated, true).secondMaxLevel, -1, 'Repeated timestamps are not another observation')
-console.log('PASS level-seven/two-times onset gates, complete eight-sample backgrounds, independent activation and timestamp deduplication')
+console.log('PASS level-six/two-times onset gates, low-level pick submission, complete eight-sample backgrounds, independent activation and timestamp deduplication')
 
-// Either sample may reach level seven when backdating, including to the previous pick's closing sample.
+// Either sample may reach level six when backdating, including to the previous pick's closing sample.
 const initialMotion = replayPgas([...Array(7).fill(0.21), 0.4, 0.6])
 assert.deepEqual([initialMotion.triggerMaxPga, initialMotion.triggerSecondMaxPga, initialMotion.noNewPeakCount], [0.6, 0.4, 0])
 assert.equal(createPalertHypocenterUpdate([initialMotion]).pickCandidates.length, 0)
@@ -448,7 +458,15 @@ assert.deepEqual([initialMotionPick.maxLevel, initialMotionPick.secondMaxLevel],
 feedPga(initialMotion, 0.8)
 assert.equal(initialMotion.triggerStamp, stamp + 7000, 'Later qualifying samples cannot rewrite an existing pick onset')
 assert.deepEqual([initialMotion.triggerMaxPga, initialMotion.triggerSecondMaxPga], [0.8, 0.6])
-assert.equal(triggerPgas([...Array(7).fill(0.1), 0.4, 0.58]).triggerStamp, null, 'At least one sample in the pair must reach level seven')
+assert.equal(triggerPgas([...Array(7).fill(0.1), 0.4, 0.43]).triggerStamp, null, 'At least one sample in the pair must reach level six')
+for(const pair of [[0.44, 0.43], [0.43, 0.44]]) {
+    const station = replayPgas([...Array(8).fill(0.3), pair[0]])
+    assert.equal(station.triggerStamp, null)
+    feedPga(station, pair[1])
+    assert.deepEqual(pickMetrics(station), { triggerStamp: stamp + 8000, maxLevel: 6, secondMaxLevel: 5 },
+        'Either a preceding or current level-six sample permits backdating')
+    assert.equal(station.activity, 0.1)
+}
 for(const pair of [[0.65, 0.58], [0.58, 0.65]]) {
     const station = replayPgas([...Array(8).fill(0.35), pair[0]])
     assert.equal(station.triggerStamp, null, 'The first sample alone cannot trigger over this background')
@@ -457,26 +475,26 @@ for(const pair of [[0.65, 0.58], [0.58, 0.65]]) {
     assert.deepEqual([station.maxLevel, station.secondMaxLevel, station.triggerMaxPga,
         station.triggerSecondMaxPga, station.noNewPeakCount], [7, 6, 0.65, 0.58, 0], 'Both samples initialize the same pick metrics in either ordering')
 }
-assert.equal(triggerPgas([...Array(8).fill(0.35), 0.58, 0.58]).triggerStamp, null, 'Two samples below level seven cannot start a pick')
-assert.equal(triggerPgas([...Array(8).fill(0.35), 0.59, 0.525]).triggerStamp, stamp + 8000, 'A preceding level-seven sample and a current sample at 1.5 times background are accepted')
-assert.equal(triggerPgas([...Array(8).fill(0.35), 0.65, 0.524]).triggerStamp, null, 'A preceding level-seven sample cannot bypass the current PGA ratio requirement')
-assert.equal(triggerPgas([...Array(7).fill(0.5), 0.749, 0.8]).triggerStamp, null)
-const equalInitialMotion = replayPgas([...Array(7).fill(0.5), 0.75, 0.75])
-assert.equal(equalInitialMotion.triggerStamp, stamp + 7000, 'The exact 1.5-times boundary and equal consecutive PGAs are accepted')
+assert.equal(triggerPgas([...Array(8).fill(0.3), 0.43, 0.43]).triggerStamp, null, 'Two samples below level six cannot start a pick')
+assert.equal(triggerPgas([...Array(8).fill(0.3), 0.44, 0.39]).triggerStamp, stamp + 8000, 'A preceding level-six sample and a current sample at 1.3 times background are accepted')
+assert.equal(triggerPgas([...Array(8).fill(0.3), 0.44, 0.389]).triggerStamp, null, 'A preceding level-six sample cannot bypass the current PGA ratio requirement')
+assert.equal(triggerPgas([...Array(7).fill(0.5), 0.649, 0.8]).triggerStamp, null)
+const equalInitialMotion = replayPgas([...Array(7).fill(0.5), 0.65, 0.65])
+assert.equal(equalInitialMotion.triggerStamp, stamp + 7000, 'The exact 1.3-times boundary and equal consecutive PGAs are accepted')
 assert.deepEqual([equalInitialMotion.maxLevel, equalInitialMotion.secondMaxLevel, equalInitialMotion.triggerMaxPga,
-    equalInitialMotion.triggerSecondMaxPga, equalInitialMotion.noNewPeakCount], [7, 7, 0.75, 0.75, 0])
+    equalInitialMotion.triggerSecondMaxPga, equalInitialMotion.noNewPeakCount], [7, 7, 0.65, 0.65, 0])
 for(let i = 1; i <= 8; i++) {
-    feedPga(equalInitialMotion, 0.75)
+    feedPga(equalInitialMotion, 0.65)
     assert.equal(equalInitialMotion.triggerStamp, i < 8 ? stamp + 7000 : null, 'Both backdated samples are counted once before the eight-frame timeout')
 }
 assert.equal(triggerPgas([...Array(7).fill(0.5), 1.5, 1.4]).triggerStamp, stamp + 7000, 'A decreasing pair above the shared background threshold can backdate')
 const fallingInitialMotion = replayPgas([...Array(8).fill(0.5), 0.875])
 assert.equal(fallingInitialMotion.triggerStamp, null, 'The preceding sample alone does not reach the direct two-times threshold')
-feedPga(fallingInitialMotion, 0.75)
-assert.equal(fallingInitialMotion.triggerStamp, stamp + 8000, 'A lower current PGA at the exact 1.5-times boundary confirms the preceding onset')
+feedPga(fallingInitialMotion, 0.65)
+assert.equal(fallingInitialMotion.triggerStamp, stamp + 8000, 'A lower current PGA at the exact 1.3-times boundary confirms the preceding onset')
 assert.deepEqual([fallingInitialMotion.maxLevel, fallingInitialMotion.secondMaxLevel, fallingInitialMotion.triggerMaxPga,
-    fallingInitialMotion.triggerSecondMaxPga, fallingInitialMotion.noNewPeakCount], [8, 7, 0.875, 0.75, 0])
-assert.equal(triggerPgas([...Array(8).fill(0.5), 0.875, 0.749]).triggerStamp, null, 'The current sample must independently reach 1.5 times the background')
+    fallingInitialMotion.triggerSecondMaxPga, fallingInitialMotion.noNewPeakCount], [8, 7, 0.875, 0.65, 0])
+assert.equal(triggerPgas([...Array(8).fill(0.5), 0.875, 0.649]).triggerStamp, null, 'The current sample must independently reach 1.3 times the background')
 assert.equal(triggerPgas([0.5, ...Array(6).fill(0.1), 0.4, 0.6]).triggerStamp, null, 'The seven-point background still includes t-8')
 assert.equal(triggerPgas([4, ...Array(7).fill(0.1), 0.4, 0.6]).triggerStamp, stamp + 8000, 't-9 is outside the requested background')
 for(const invalidIndex of [0, 1, 2, 8]) {
@@ -537,7 +555,7 @@ for(const resetMethod of ['clearRecentData', 'clearHistory']) {
     for(const sample of [...pgaHistory([...Array(7).fill(0.21), 0.4, 0.6])].reverse()) station.update(sample, 0, false)
     assert.equal(station.triggerStamp, stamp + 7000, 'A reset timeline initializes a fresh pick from its own history')
 }
-console.log('PASS preferred one-frame backdating, seven-point 1.5-times backgrounds, shared boundary samples, independent picks, frozen old metrics, direct fallback and timeline reset')
+console.log('PASS preferred one-frame backdating, seven-point 1.3-times backgrounds, shared boundary samples, independent picks, frozen old metrics, direct fallback and timeline reset')
 
 // Either of the top two PGA values can renew a pick, including filling the second observation.
 const tracking = replayPgas([...quietPgas, 2.5])
@@ -684,7 +702,7 @@ for(const initialPgv of [0, 140]) {
     assert.deepEqual([station.maxLevel, station.secondMaxLevel, station.triggerMaxPga, station.triggerSecondMaxPga], [7, -1, 0.6, null])
     const next = createPalertHypocenterUpdate([station])
     assert.notEqual(next.pickCandidates[0].pickId, firstPickId)
-    assert.equal(profile.getPickBaseWeight(next.pickCandidates[0]), 0.2)
+    assert.equal(profile.getPickBaseWeight(next.pickCandidates[0]), 0.4)
     const coalesced = mergePalertHypocenterUpdates(pending, next)
     assert.equal(coalesced.pickCandidates.length, 2)
     assert.equal(coalesced.activeStations[0].maxLevel, 7, 'A new pick never inherits old pick metrics')
@@ -698,7 +716,7 @@ for(const initialPgv of [0, 140]) {
 }
 console.log('PASS final-frame PGA/PGV metrics, null active triggers, pending merge, frozen old picks and independent subsequent picks')
 
-for(const [level, activity] of [[-1, 0], [0, 0], [6, 0], [7, 0.5], [8, 1], [9, 1.5], [10, 2], [11, 2], [20, 2]]) {
+for(const [level, activity] of [[-1, 0], [0, 0], [5, 0], [6, 0.1], [7, 0.5], [8, 1], [9, 1.5], [10, 2], [11, 2], [20, 2]]) {
     const station = new PalertStation(null, 'W001', [24, 121], true)
     station.update({ timestamp: stamp, pga: null, pgv: null, level }, 0, false)
     assert.equal(station.activity, activity)
@@ -714,8 +732,8 @@ for(let second = 0; second <= 60; second++) {
 }
 assert.equal(originalPalertActivity(ratioStation.recentData), 1, 'This fixture previously gained activity from the PGA ratio')
 assert.equal(ratioStation.level, 6)
-assert.equal(ratioStation.activity, 0, 'The PGA ratio no longer grants activity below level seven')
-assert(!ratioStation.isPenaltyStation(), 'Level six excludes a penalty candidate even with zero activity')
+assert.equal(ratioStation.activity, 0.1, 'Level six grants only its level-based activity despite the high PGA ratio')
+assert(!ratioStation.isPenaltyStation(), 'Level six excludes a penalty candidate')
 for(let second = 61; second <= 120; second++) {
     ratioStation.update({ timestamp: stamp + second * 1000, pga: 0.05, pgv: null, level: 0 }, 0, false)
     assert.equal(ratioStation.isPenaltyStation(), second >= 70, 'Ten seconds after the boundary restores base eligibility')
@@ -817,6 +835,7 @@ const detectStations = (stations, adjacency, tolerances = Object.fromEntries(Obj
 for(const [neighborCount, activities, shouldActivate] of [
     [20, [2, 1], false], [20, [2, 1.5], true],
     [28, [2, 1.5], true], [29, [2, 1.5], false],
+    [36, [2, 2, ...Array(4).fill(0.1)], false], [36, [2, 2, ...Array(5).fill(0.1)], true],
     [40, [2, 2, 0.5], false], [40, [2, 2, 1], true]
 ]) {
     const detectionStations = Object.fromEntries(Array.from({ length: neighborCount }, (_, index) => [String(index), {
@@ -850,7 +869,7 @@ console.log('PASS detection activity threshold at 12.5 percent of neighbors with
         for(const station of stations) station.update({ timestamp: now, pga, level: getPalertLevelFromPgaPgv(pga, null) }, 0, false)
         for(const station of detectStations(stationMap, adjacency)) station.setActive()
         if(second === 0) assert(stations.every(station => station.isActive && station.triggerStamp === stamp))
-        if(second === 24) assert(stations.every(station => !station.isActive && station.activity === 0 && station.triggerStamp === null))
+        if(second === 24) assert(stations.every(station => !station.isActive && station.activity === 0.1 && station.triggerStamp === null))
         if(second === 25) assert(stations.every(station => !station.isActive && station.activity === 0.5 && station.triggerStamp === null),
             'Seven weak fluctuations cannot reuse old compatible timestamps to reactivate the network')
         if(second === 26) assert(stations.every(station => station.isActive && station.triggerStamp === now),
@@ -941,7 +960,7 @@ const largeAdjacency = Object.fromEntries(Object.keys(largeNeighborhood).map(id 
 assert.equal(detectStations(largeNeighborhood, largeAdjacency).size, 0, 'The 12.5-percent denominator remains the full neighborhood, not just compatible stations')
 console.log('PASS activation trigger validity, pairwise tolerance boundaries, compatible-only activity, chain barriers and unchanged threshold denominator')
 
-for(const [maxLevel, weight] of [[-1, 0], [6, 0], [7, 0.2], [8, 0.8], [9, 1.2], [10, 1.4], [11, 1.6], [12, 1.8], [13, 2], [20, 2], [NaN, 0]]) {
+for(const [maxLevel, weight] of [[-1, 0], [5, 0], [6, 0.1], [7, 0.4], [8, 1.6], [9, 2.4], [10, 2.8], [11, 3.2], [12, 3.6], [13, 4], [20, 4], [NaN, 0]]) {
     assert.equal(profile.getPickBaseWeight({ maxLevel }), weight)
 }
 assert.notEqual(profile.parameters, nied.parameters)
@@ -1051,7 +1070,7 @@ console.log('PASS P/S penalty thresholds, half-rate slope, caps and greedy/PREV 
 
 assert(finder.hasValidPickCandidate({ stationId: 'W460', triggerStamp: stamp, pickId: `W460:${stamp}` }))
 assert(!finder.hasValidPickCandidate({ stationId: 460, triggerStamp: stamp, pickId: `460:${stamp}` }))
-assert.equal(finder.getPickWeight({ maxLevel: 13, densityWeight: 0.25 }, 0.5), 0.25)
+assert.equal(finder.getPickWeight({ maxLevel: 13, densityWeight: 0.25 }, 0.5), 0.5)
 const pick = { stationId: 'W460', pickId: `W460:${stamp}`, latLng: [24, 121], triggerStamp: stamp, updateStamp: stamp, maxLevel: 12, secondMaxLevel: 8 }
 finder.upsertPickCandidate(pick)
 const stored = finder.picks.get(pick.pickId)
@@ -1064,7 +1083,7 @@ const quietSnapshot = { id: 'W460', latLng: [24, 121], updateStamp: stamp + 1200
 const penaltyContext = [{ stationId: 'other', triggerStamp: stamp + 2000 }]
 finder.update([], [quietSnapshot], [{ id: 'W460', triggerStamp: null, updateStamp: stamp + 2000 }])
 assert.equal(finder.picks.get(pick.pickId), stored, 'Invalid current trigger preserves accepted evidence')
-assert.equal(finder.getPickWeight(stored), 1.8)
+assert.equal(finder.getPickWeight(stored), 3.6)
 assert.deepEqual(finder.getInactivePenaltyCandidates(penaltyContext), [quietSnapshot], 'A retained pick from an older event does not globally exclude a quiet station')
 assert.deepEqual(finder.getInactivePenaltyCandidates([pick]), [], 'A station does not penalize its own cluster')
 assert.deepEqual(finder.getInactivePenaltyCandidates([]), [], 'No cluster start means no penalty evidence')

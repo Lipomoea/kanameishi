@@ -152,7 +152,8 @@ const detectActiveStations = () => {
                     .map(id => stations[id])
                     .filter(Boolean)
                 const compatibleNearbyStations = getCompatibleNearbyStations(station, nearbyStations)
-                const activitySum = compatibleNearbyStations.reduce((sum, nearbyStation) => sum + nearbyStation.activity, 0)
+                // Sum integer tenths so level-six contributions meet exact detection thresholds.
+                const activitySum = compatibleNearbyStations.reduce((sum, nearbyStation) => sum + nearbyStation.activity * 10, 0) / 10
                 if(activitySum >= Math.max(nearbyStations.length * 0.125, 3.5)) {
                     chainActivate(station, activeStations)
                 }

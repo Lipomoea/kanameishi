@@ -312,7 +312,12 @@ export class PalertStation {
     calcActivity(){
         const recentData = this.recentData.slice(0, this.activitySeconds)
         const maxLevel = Math.max(...recentData.map(data => data.level), -1)
-        return maxLevel >= 10 ? 2 : maxLevel >= 9 ? 1.5 : maxLevel >= 8 ? 1 : maxLevel >= 7 ? 0.5 : 0
+        if(maxLevel >= 10) return 2
+        if(maxLevel >= 9) return 1.5
+        if(maxLevel >= 8) return 1
+        if(maxLevel >= 7) return 0.5
+        if(maxLevel >= 6) return 0.1
+        return 0
     }
     updateTrigger(sample){
         const { timestamp, level, pga } = sample
@@ -328,15 +333,15 @@ export class PalertStation {
                 if(offset >= 2) backgroundMaxPga = Math.max(backgroundMaxPga, before.pga)
             }
             const previous = this.recentData[1]
-            // Either sample may reach level seven; prefer the preceding sample as onset, including a completed pick's final sample.
-            if((level >= 7 || previous.level >= 7) && previous.pga > 0 &&
+            // Either sample may reach level six; prefer the preceding sample as onset, including a completed pick's final sample.
+            if((level >= 6 || previous.level >= 6) && previous.pga > 0 &&
                 pga >= backgroundMaxPga * 1.5 && previous.pga >= backgroundMaxPga * 1.5) {
                 this.triggerStamp = previous.timestamp
                 this.maxLevel = previous.level
                 this.triggerMaxPga = previous.pga
             }
             else {
-                if(level < 7 || pga <= 0 || pga < Math.max(backgroundMaxPga, previous.pga) * 2) return
+                if(level < 6 || pga <= 0 || pga < Math.max(backgroundMaxPga, previous.pga) * 2) return
                 this.triggerStamp = timestamp
             }
         }

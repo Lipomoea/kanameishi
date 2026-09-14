@@ -74,6 +74,9 @@ const currentMaxShindo = computed(()=>{
     else if(currentMaxLevel <= 11) return 6
     else return 7
 })
+// Percent is an integer (60 means 60%); compare integer products to avoid floating-point rounding.
+const meetsStationThreshold = (count, totalCount, percent, minCount) =>
+    count >= minCount && count * 100 >= totalCount * percent
 const update = (intensities) => {
     const render = document.visibilityState === 'visible'
     if(!render) pendingRender = true
@@ -103,13 +106,20 @@ const update = (intensities) => {
             const countAsc2 = nearbyAscends.filter(ascend => ascend >= 2).length
             switch(settingsStore.mainSettings.displaySeisNet.kmaSensitivity) {
                 case 1: 
-                    flag = countInt1 >= Math.max(0.6 * nearbyNum, 4) || countInt2 >= Math.max(0.2 * nearbyNum, 2) || countAsc2 >= Math.max(0.7 * nearbyNum, 4)
+                    flag = meetsStationThreshold(countInt1, nearbyNum, 60, 4) ||
+                        meetsStationThreshold(countInt2, nearbyNum, 20, 2) ||
+                        meetsStationThreshold(countAsc2, nearbyNum, 70, 4)
                     break
                 case 2: 
-                    flag = countInt1 >= Math.max(0.5 * nearbyNum, 3) || countInt2 >= Math.max(0.15 * nearbyNum, 2) || countAsc2 >= Math.max(0.6 * nearbyNum, 4)
+                    flag = meetsStationThreshold(countInt1, nearbyNum, 50, 3) ||
+                        meetsStationThreshold(countInt2, nearbyNum, 15, 2) ||
+                        meetsStationThreshold(countAsc2, nearbyNum, 60, 4)
                     break
                 case 3: 
-                    flag = countInt1 >= Math.max(0.5 * nearbyNum, 3) || countInt2 >= Math.max(0.15 * nearbyNum, 2) || countAsc2 >= Math.max(0.6 * nearbyNum, 4) || countAsc1 >= Math.max(0.8 * nearbyNum, 5)
+                    flag = meetsStationThreshold(countInt1, nearbyNum, 50, 3) ||
+                        meetsStationThreshold(countInt2, nearbyNum, 15, 2) ||
+                        meetsStationThreshold(countAsc2, nearbyNum, 60, 4) ||
+                        meetsStationThreshold(countAsc1, nearbyNum, 80, 5)
                     break
                 default:
                     return
