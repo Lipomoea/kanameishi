@@ -13,6 +13,7 @@ const createDefaultSettings = () => {
             apiKeys: {
                 fanApiKey: ''
             },
+            apiAuthAutoReconnect: false,
             displaySeisNet: {
                 style: 'nied',
                 hideNoData: false,
@@ -248,6 +249,9 @@ export const useSettingsStore = defineStore('settingsStore', {
         },
         setMainSettings(jsonString){
             const json = parseSettings(jsonString)
+            if(!Object.hasOwn(json, 'apiAuthAutoReconnect') && typeof json.fanAuthAutoReconnect === 'boolean') {
+                json.apiAuthAutoReconnect = json.fanAuthAutoReconnect
+            }
             this.mainSettings = restoreSettings(createDefaultSettings().mainSettings, json, mainSettingsArrayReaders)
             if(!['realtime', 'complete'].includes(this.mainSettings.displaySeisNet.httpDataPriority)) {
                 this.mainSettings.displaySeisNet.httpDataPriority = 'realtime'

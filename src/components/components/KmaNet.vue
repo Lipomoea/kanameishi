@@ -158,7 +158,7 @@ const initGridCanvasLayer = () => {
 }
 let kmaSocket = null
 onMounted(()=>{
-    const apiKey = settingsStore.mainSettings.apiKeys.fanApiKey
+    const apiKey = settingsStore.mainSettings.apiKeys.fanApiKey?.trim()
     if(!apiKey) {
         ElMessage({
             message: '未填写FAN Studio API Key, KMA-PEWS不可用',
@@ -175,13 +175,17 @@ onMounted(()=>{
     const url = [...seisNetUrls.kma]
     const defaultId = settingsStore.advancedSettings.defaultFanServer
     url.unshift(...url.splice(defaultId, 1))
-    kmaSocket = new WebSocketObj(url, ['ping'], [authMessage])
+    const autoReconnectOnAuthFail = settingsStore.mainSettings.apiAuthAutoReconnect
+    kmaSocket = new WebSocketObj(url, ['ping'], [authMessage], {
+        resetRetryOnOpen: !autoReconnectOnAuthFail
+    })
     kmaSocket.setMessageHandler(e => {
         if(stopped) return
         const data = JSON.parse(e.data)
         const type = data?.type
         switch(type) {
             case 'auth_success': {
+                kmaSocket.resetRetryInterval()
                 ElMessage({
                     message: 'FAN Studio API (KMA-PEWS)认证成功',
                     type: 'success'
@@ -197,7 +201,8 @@ onMounted(()=>{
                     duration: 10000,
                     showClose: true
                 })
-                settingsStore.mainSettings.displaySeisNet.kmaNet = false
+                if(autoReconnectOnAuthFail) kmaSocket.retryAfterFailure()
+                else settingsStore.mainSettings.displaySeisNet.kmaNet = false
                 break
             }
             case 'initial_stations': case 'kma_stations_update': {

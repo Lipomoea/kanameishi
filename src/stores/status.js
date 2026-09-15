@@ -1408,9 +1408,13 @@ export const useStatusStore = defineStore('statusStore', {
                     const fanUrls = [...eqUrls.fan_ws]
                     const defaultId = settingsStore.advancedSettings.defaultFanServer
                     fanUrls.unshift(...fanUrls.splice(defaultId, 1))
-                    this.fanSocket = new WebSocketObj(fanUrls, autoMsg, initMsg)
+                    const autoReconnectOnAuthFail = Boolean(apiKey) && settingsStore.mainSettings.apiAuthAutoReconnect
+                    this.fanSocket = new WebSocketObj(fanUrls, autoMsg, initMsg, {
+                        resetRetryOnOpen: !autoReconnectOnAuthFail
+                    })
                     this.trackWebSocketStatus('fan', this.fanSocket)
                     this.fanSocket.setCloseHandler(() => {
+                        if(autoReconnectOnAuthFail && this.fanSocket.shouldConnect && this.fanAuthStatus == 0) return
                         this.fanAuthStatus = -1
                     })
                     this.fanSocket.setMessageHandler((e)=>{
@@ -1418,6 +1422,7 @@ export const useStatusStore = defineStore('statusStore', {
                         switch(data.type) {
                             case 'auth_success': {
                                 this.fanAuthStatus = 1
+                                this.fanSocket.resetRetryInterval()
                                 ElMessage({
                                     message: 'FAN Studio API认证成功',
                                     type: 'success'
@@ -1434,6 +1439,7 @@ export const useStatusStore = defineStore('statusStore', {
                                     duration: 10000,
                                     showClose: true
                                 })
+                                if(autoReconnectOnAuthFail) this.fanSocket.retryAfterFailure()
                                 break
                             }
                             case 'initial_all': case 'query_response': {

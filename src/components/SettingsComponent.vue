@@ -1394,7 +1394,14 @@
                 </el-form-item>
             </el-form>
             <template #footer>
-                <el-button type="primary" @click="showApiKeyManager = false">完成</el-button>
+                <div class="justify-between">
+                    <el-switch
+                        v-model="settingsStore.mainSettings.apiAuthAutoReconnect"
+                        active-text="认证失败时自动重连"
+                        @change="handleNeedReload"
+                    />
+                    <el-button type="primary" @click="showApiKeyManager = false">完成</el-button>
+                </div>
             </template>
         </el-dialog>
         <el-dialog class="about-box" v-model="showAbout" width="60%" :show-close="false" append-to-body>
