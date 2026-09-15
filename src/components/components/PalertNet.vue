@@ -10,7 +10,7 @@ import { StationFrameQueue } from '@/utils/StationFrameQueue';
 import { useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
 import { iconUrls } from '@/utils/Urls';
-import { calcDistanceKm, calcBearingDeg, calcLngDiff, calcWaveDistance, timeToStamp, focusWindow, getPalertLevelFromPgaPgv, getShindoFromLevel, playSound, sendMyNotification, stampToTime } from '@/utils/Utils';
+import { calcDistanceKm, calcBearingDeg, calcLngDiff, calcWaveDistance, compareFloat, timeToStamp, focusWindow, getPalertLevelFromPgaPgv, getShindoFromLevel, playSound, sendMyNotification, stampToTime } from '@/utils/Utils';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { PalertStation, simpleIcon } from '@/classes/StationClasses';
@@ -140,8 +140,25 @@ const chainActivate = (seedStation, activeStations) => {
     }
 }
 const detectActiveStations = () => {
-    const possibleStations = Object.values(stations).filter(station => station.activity > 0)
     const activeStations = new Set()
+    let minActivity, activityPercent
+    switch(settingsStore.mainSettings.displaySeisNet.palertSensitivity) {
+        case 1:
+            minActivity = 3.5
+            activityPercent = 12.5
+            break
+        case 2:
+            minActivity = 3
+            activityPercent = 10
+            break
+        case 3:
+            minActivity = 2.5
+            activityPercent = 8
+            break
+        default:
+            return activeStations
+    }
+    const possibleStations = Object.values(stations).filter(station => station.activity > 0)
     possibleStations.forEach(station => {
         if(!activeStations.has(station)) {
             if(station.isActive && station.level >= 10 && hasValidTriggerStamp(station)) {
@@ -152,9 +169,9 @@ const detectActiveStations = () => {
                     .map(id => stations[id])
                     .filter(Boolean)
                 const compatibleNearbyStations = getCompatibleNearbyStations(station, nearbyStations)
-                // Sum integer tenths so level-six contributions meet exact detection thresholds.
-                const activitySum = compatibleNearbyStations.reduce((sum, nearbyStation) => sum + nearbyStation.activity * 10, 0) / 10
-                if(activitySum >= Math.max(nearbyStations.length * 0.125, 3.5)) {
+                const activitySum = compatibleNearbyStations.reduce((sum, nearbyStation) => sum + nearbyStation.activity, 0)
+                // Multiply by the percentage first to keep boundaries such as 33 * 10 / 100 at 3.3.
+                if(compareFloat(activitySum, Math.max(nearbyStations.length * activityPercent / 100, minActivity)) >= 0) {
                     chainActivate(station, activeStations)
                 }
             }
@@ -360,8 +377,8 @@ const isCloseToCwaEewHypocenter = (result, eqMessage) => {
     const eewOriginStamp = timeToStamp(eqMessage.originTime, eqMessage.timeZone)
     if(!Number.isFinite(eewOriginStamp) || eewOriginStamp <= 0) return false
     const hypocenter = result.hypocenter
-    return Math.abs(hypocenter.lat - eqMessage.lat) <= hypoInfEewMatchThreshold.lat &&
-        calcLngDiff(hypocenter.lng, eqMessage.lng) <= hypoInfEewMatchThreshold.lng &&
+    return compareFloat(Math.abs(hypocenter.lat - eqMessage.lat), hypoInfEewMatchThreshold.lat) <= 0 &&
+        compareFloat(calcLngDiff(hypocenter.lng, eqMessage.lng), hypoInfEewMatchThreshold.lng) <= 0 &&
         Math.abs((hypocenter.depth ?? 10) - eqMessage.depth) <= hypoInfEewMatchThreshold.depth &&
         Math.abs(result.originStamp - eewOriginStamp) <= hypoInfEewMatchThreshold.originStamp
 }
@@ -496,8 +513,13 @@ const buildAdjStations = () => {
                 distance: calcDistanceKm(stations[id].latLng, stations[stationId].latLng)
             }))
             .sort((a, b) => a.distance - b.distance)
-        // Keep the existing activation neighborhood; inference fills each direction to its minimum count.
+        // Keep all local activation neighbors, filling sparse neighborhoods to four within 40 km.
         const nearbyDistances = sortedDistances.filter(({ distance }) => distance <= 30)
+        if(nearbyDistances.length < 4) {
+            nearbyDistances.push(...sortedDistances
+                .filter(({ distance }) => distance > 30 && distance <= 40)
+                .slice(0, 4 - nearbyDistances.length))
+        }
         detectionAdjStations[id] = nearbyDistances.map(({ stationId }) => stationId)
         triggerDiffTolerances[id] = Object.fromEntries(nearbyDistances.map(({ stationId, distance }) => [
             stationId,

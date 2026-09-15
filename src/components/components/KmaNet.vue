@@ -47,7 +47,7 @@ const activeStations = computed(() => stations.filter(station => station.isActiv
 const grids = computed(()=>{
     const gridMap = {}
     activeStations.value.forEach(station=>{
-        const latLng = station.latLng.map((l, index) => Math.round(l - decimal[index]) + decimal[index])
+        const latLng = station.latLng.map((l, index) => Math.round(exactRound(l - decimal[index], 10)) + decimal[index])
         const level = station.activityLevel
         const key = JSON.stringify(latLng)
         if(key in gridMap){

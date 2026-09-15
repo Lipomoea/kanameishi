@@ -12,7 +12,7 @@ import axios from 'axios';
 import { useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
 import { seisNetUrls, iconUrls } from '@/utils/Urls';
-import { getTimeNumberString, playSound, sendMyNotification, focusWindow, getShindoFromLevel, exactRound, timeToStamp, calcDistanceKm, calcBearingDeg, calcLngDiff, stampToTime, calcWaveDistance } from '@/utils/Utils';
+import { getTimeNumberString, playSound, sendMyNotification, focusWindow, getShindoFromLevel, exactRound, timeToStamp, calcDistanceKm, calcBearingDeg, calcLngDiff, compareFloat, stampToTime, calcWaveDistance } from '@/utils/Utils';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { abnormalNiedStations, NiedStation, simpleIcon } from '@/classes/StationClasses';
@@ -80,7 +80,7 @@ const activeStations = computed(() => stations.filter(station => station.isActiv
 const grids = computed(()=>{
     const gridMap = {}
     activeStations.value.forEach(station=>{
-        const latLng = station.latLng.map((l, index) => Math.round(l - decimal[index]) + decimal[index])
+        const latLng = station.latLng.map((l, index) => Math.round(exactRound(l - decimal[index], 10)) + decimal[index])
         const level = station.level
         const key = JSON.stringify(latLng)
         if(key in gridMap){
@@ -478,8 +478,8 @@ const isCloseToJmaEewHypocenter = (result, eqMessage) => {
     const eewOriginStamp = timeToStamp(eqMessage.originTime, eqMessage.timeZone)
     if(!Number.isFinite(eewOriginStamp) || eewOriginStamp <= 0) return false
     const hypocenter = result.hypocenter
-    return Math.abs(hypocenter.lat - eqMessage.lat) <= hypoInfEewMatchThreshold.lat &&
-        calcLngDiff(hypocenter.lng, eqMessage.lng) <= hypoInfEewMatchThreshold.lng &&
+    return compareFloat(Math.abs(hypocenter.lat - eqMessage.lat), hypoInfEewMatchThreshold.lat) <= 0 &&
+        compareFloat(calcLngDiff(hypocenter.lng, eqMessage.lng), hypoInfEewMatchThreshold.lng) <= 0 &&
         Math.abs((hypocenter.depth ?? 10) - eqMessage.depth) <= hypoInfEewMatchThreshold.depth &&
         Math.abs(result.originStamp - eewOriginStamp) <= hypoInfEewMatchThreshold.originStamp
 }

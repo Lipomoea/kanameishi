@@ -35,7 +35,8 @@ export const calcDistanceKm = ([lat1, lng1], [lat2, lng2]) => {
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.sin(dLng / 2) ** 2;
-  return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const boundedA = Math.min(Math.max(a, 0), 1);
+  return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(boundedA), Math.sqrt(1 - boundedA));
 };
 
 export const calcLngDiff = (lng1, lng2) => {
@@ -633,8 +634,21 @@ export const calcMaxJmaShindoLevel = (
 };
 export const getMmiFromKmaLevel = level =>
   level == -1 ? "?" : Math.min(Math.max(level - 2, 0), 11).toString();
-export const exactRound = (input, digit) =>
-  Number(Math.round(input + "e" + digit) + "e-" + digit);
+export const exactRound = (input, digit) => {
+  if (!Number.isFinite(input) || !Number.isSafeInteger(digit)) return NaN;
+  const [coefficient, exponent = "0"] = String(input).split("e");
+  const shifted = Number(`${coefficient}e${Number(exponent) + digit}`);
+  // Overflow while shifting means the requested decimal places already exceed the input's precision.
+  if (!Number.isFinite(shifted)) return input;
+  const [rounded, roundedExponent = "0"] = String(Math.round(shifted)).split("e");
+  return Number(`${rounded}e${Number(roundedExponent) - digit}`);
+};
+export const compareFloat = (a, b, digit = 10) => {
+  const left = exactRound(a, digit);
+  const right = exactRound(b, digit);
+  if (Number.isNaN(left) || Number.isNaN(right)) return NaN;
+  return left < right ? -1 : left > right ? 1 : 0;
+};
 export const getCoordByDistanceBearing = (lat, lng, distanceKm, bearing) => {
   const radiusKm = EARTH_RADIUS_KM;
   const toDegrees = radians => (radians * 180) / Math.PI;

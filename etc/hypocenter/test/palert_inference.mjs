@@ -46,7 +46,7 @@ const { FindPalertHypocenter } = await load('src/classes/PalertHypoInf.js')
 const { FindNiedHypocenter } = await load('src/classes/NiedHypoInf.js')
 const { palertHypocenterProfile: profile } = await load('src/classes/PalertHypocenterProfile.js')
 const { niedHypocenterProfile: nied } = await load('src/classes/NiedHypocenterProfile.js')
-const { calcDistanceKm, calcBearingDeg, calcReachTime, getPalertLevelFromPgaPgv, stampToTime, timeToStamp } = await load('src/utils/Utils.js')
+const { calcDistanceKm, calcBearingDeg, calcReachTime, compareFloat, getPalertLevelFromPgaPgv, stampToTime, timeToStamp } = await load('src/utils/Utils.js')
 for(const [pga, expectedLevel] of [[24.999, 13], [25, 14], [43.999, 14], [44, 15], [79.999, 15]]) {
     for(const pgv of [null, 0, 15, 30, 50, 80, 140, 300]) {
         assert.equal(getPalertLevelFromPgaPgv(pga, pgv), expectedLevel, `PGA ${pga} must ignore PGV ${pgv} below 80`)
@@ -360,7 +360,8 @@ for(const name of ['Palert', 'Trem']) {
 console.log('PASS P-Alert/TREM station-list retries at twenty/ten seconds, refreshes at ten minutes, metadata validation, cached data and unmount cleanup')
 
 // Exercise the actual station class without Leaflet/Vue rendering dependencies.
-const stationSource = source => `let settingsStore = { mainSettings: { displaySeisNet: { palertLevelHold: 1 } } };
+const stationSource = source => `import { compareFloat } from '@/utils/Utils';
+let settingsStore = { mainSettings: { displaySeisNet: { palertLevelHold: 1 } } };
 const markRaw = value => value;
 const getShindoFromLevel = value => value;
 ${section(source, 'export class PalertStation', 'export class TremStation')}`
@@ -408,7 +409,7 @@ assert.equal(triggerPgas([...quietPgas, 0.59]).triggerStamp, stamp + 8000)
 assert.equal(triggerPgas([...quietPgas, 0.44]).triggerStamp, stamp + 8000, 'The level-six boundary can trigger')
 assert.equal(triggerPgas([...quietPgas, 0.439999]).triggerStamp, null, 'A rise below level six cannot trigger')
 const levelSixOnset = replayPgas([...quietPgas, 0.44])
-assert.equal(levelSixOnset.activity, 0.1)
+assert.equal(levelSixOnset.activity, 0.2)
 assert.equal(createPalertHypocenterUpdate([levelSixOnset]).pickCandidates.length, 0, 'A level-six pick still requires activation before submission')
 levelSixOnset.isActive = true
 const levelSixPick = createPalertHypocenterUpdate([levelSixOnset]).pickCandidates[0]
@@ -447,6 +448,20 @@ const repeated = history([...quiet, 12]); repeated.unshift({ ...repeated[0] })
 assert.equal(findPalertTrigger(repeated, true).secondMaxLevel, -1, 'Repeated timestamps are not another observation')
 console.log('PASS level-six/two-times onset gates, low-level pick submission, complete eight-sample backgrounds, independent activation and timestamp deduplication')
 
+for(const [previous, current, expected] of [
+    [0.6, 0.6, stamp + 8000],
+    [0.5999999999, 0.6, null], [0.6, 0.5999999999, null],
+    [0.6000000001, 0.6, stamp + 8000], [0.6, 0.6000000001, stamp + 8000],
+]) {
+    assert.equal(triggerPgas([...Array(8).fill(0.4), previous, current]).triggerStamp, expected,
+        'Both backdating samples use the default ten-decimal comparison at 0.4 * 1.5')
+}
+assert.equal(triggerPgas([...Array(8).fill(0.4), 0.8]).triggerStamp, stamp + 8000)
+assert.equal(triggerPgas([...Array(8).fill(0.4), 0.7999999999]).triggerStamp, null)
+assert.equal(triggerPgas(Array(9).fill(Number.MAX_VALUE)).triggerStamp, null,
+    'An overflowed ratio threshold cannot create a trigger')
+console.log('PASS rounded PGA ratio boundaries, values on both sides and overflow rejection')
+
 // Either sample may reach level six when backdating, including to the previous pick's closing sample.
 const initialMotion = replayPgas([...Array(7).fill(0.21), 0.4, 0.6])
 assert.deepEqual([initialMotion.triggerMaxPga, initialMotion.triggerSecondMaxPga, initialMotion.noNewPeakCount], [0.6, 0.4, 0])
@@ -460,12 +475,12 @@ assert.equal(initialMotion.triggerStamp, stamp + 7000, 'Later qualifying samples
 assert.deepEqual([initialMotion.triggerMaxPga, initialMotion.triggerSecondMaxPga], [0.8, 0.6])
 assert.equal(triggerPgas([...Array(7).fill(0.1), 0.4, 0.43]).triggerStamp, null, 'At least one sample in the pair must reach level six')
 for(const pair of [[0.44, 0.43], [0.43, 0.44]]) {
-    const station = replayPgas([...Array(8).fill(0.3), pair[0]])
+    const station = replayPgas([...Array(8).fill(0.28), pair[0]])
     assert.equal(station.triggerStamp, null)
     feedPga(station, pair[1])
     assert.deepEqual(pickMetrics(station), { triggerStamp: stamp + 8000, maxLevel: 6, secondMaxLevel: 5 },
         'Either a preceding or current level-six sample permits backdating')
-    assert.equal(station.activity, 0.1)
+    assert.equal(station.activity, 0.2)
 }
 for(const pair of [[0.65, 0.58], [0.58, 0.65]]) {
     const station = replayPgas([...Array(8).fill(0.35), pair[0]])
@@ -476,25 +491,25 @@ for(const pair of [[0.65, 0.58], [0.58, 0.65]]) {
         station.triggerSecondMaxPga, station.noNewPeakCount], [7, 6, 0.65, 0.58, 0], 'Both samples initialize the same pick metrics in either ordering')
 }
 assert.equal(triggerPgas([...Array(8).fill(0.3), 0.43, 0.43]).triggerStamp, null, 'Two samples below level six cannot start a pick')
-assert.equal(triggerPgas([...Array(8).fill(0.3), 0.44, 0.39]).triggerStamp, stamp + 8000, 'A preceding level-six sample and a current sample at 1.3 times background are accepted')
-assert.equal(triggerPgas([...Array(8).fill(0.3), 0.44, 0.389]).triggerStamp, null, 'A preceding level-six sample cannot bypass the current PGA ratio requirement')
-assert.equal(triggerPgas([...Array(7).fill(0.5), 0.649, 0.8]).triggerStamp, null)
-const equalInitialMotion = replayPgas([...Array(7).fill(0.5), 0.65, 0.65])
-assert.equal(equalInitialMotion.triggerStamp, stamp + 7000, 'The exact 1.3-times boundary and equal consecutive PGAs are accepted')
+assert.equal(triggerPgas([...Array(8).fill(0.28), 0.44, 0.42]).triggerStamp, stamp + 8000, 'A preceding level-six sample and a current sample at 1.5 times background are accepted')
+assert.equal(triggerPgas([...Array(8).fill(0.28), 0.44, 0.419]).triggerStamp, null, 'A preceding level-six sample cannot bypass the current PGA ratio requirement')
+assert.equal(triggerPgas([...Array(7).fill(0.5), 0.749, 0.8]).triggerStamp, null)
+const equalInitialMotion = replayPgas([...Array(7).fill(0.5), 0.75, 0.75])
+assert.equal(equalInitialMotion.triggerStamp, stamp + 7000, 'The exact 1.5-times boundary and equal consecutive PGAs are accepted')
 assert.deepEqual([equalInitialMotion.maxLevel, equalInitialMotion.secondMaxLevel, equalInitialMotion.triggerMaxPga,
-    equalInitialMotion.triggerSecondMaxPga, equalInitialMotion.noNewPeakCount], [7, 7, 0.65, 0.65, 0])
+    equalInitialMotion.triggerSecondMaxPga, equalInitialMotion.noNewPeakCount], [7, 7, 0.75, 0.75, 0])
 for(let i = 1; i <= 8; i++) {
-    feedPga(equalInitialMotion, 0.65)
+    feedPga(equalInitialMotion, 0.75)
     assert.equal(equalInitialMotion.triggerStamp, i < 8 ? stamp + 7000 : null, 'Both backdated samples are counted once before the eight-frame timeout')
 }
 assert.equal(triggerPgas([...Array(7).fill(0.5), 1.5, 1.4]).triggerStamp, stamp + 7000, 'A decreasing pair above the shared background threshold can backdate')
 const fallingInitialMotion = replayPgas([...Array(8).fill(0.5), 0.875])
 assert.equal(fallingInitialMotion.triggerStamp, null, 'The preceding sample alone does not reach the direct two-times threshold')
-feedPga(fallingInitialMotion, 0.65)
-assert.equal(fallingInitialMotion.triggerStamp, stamp + 8000, 'A lower current PGA at the exact 1.3-times boundary confirms the preceding onset')
+feedPga(fallingInitialMotion, 0.75)
+assert.equal(fallingInitialMotion.triggerStamp, stamp + 8000, 'A lower current PGA at the exact 1.5-times boundary confirms the preceding onset')
 assert.deepEqual([fallingInitialMotion.maxLevel, fallingInitialMotion.secondMaxLevel, fallingInitialMotion.triggerMaxPga,
-    fallingInitialMotion.triggerSecondMaxPga, fallingInitialMotion.noNewPeakCount], [8, 7, 0.875, 0.65, 0])
-assert.equal(triggerPgas([...Array(8).fill(0.5), 0.875, 0.649]).triggerStamp, null, 'The current sample must independently reach 1.3 times the background')
+    fallingInitialMotion.triggerSecondMaxPga, fallingInitialMotion.noNewPeakCount], [8, 7, 0.875, 0.75, 0])
+assert.equal(triggerPgas([...Array(8).fill(0.5), 0.875, 0.749]).triggerStamp, null, 'The current sample must independently reach 1.5 times the background')
 assert.equal(triggerPgas([0.5, ...Array(6).fill(0.1), 0.4, 0.6]).triggerStamp, null, 'The seven-point background still includes t-8')
 assert.equal(triggerPgas([4, ...Array(7).fill(0.1), 0.4, 0.6]).triggerStamp, stamp + 8000, 't-9 is outside the requested background')
 for(const invalidIndex of [0, 1, 2, 8]) {
@@ -555,7 +570,7 @@ for(const resetMethod of ['clearRecentData', 'clearHistory']) {
     for(const sample of [...pgaHistory([...Array(7).fill(0.21), 0.4, 0.6])].reverse()) station.update(sample, 0, false)
     assert.equal(station.triggerStamp, stamp + 7000, 'A reset timeline initializes a fresh pick from its own history')
 }
-console.log('PASS preferred one-frame backdating, seven-point 1.3-times backgrounds, shared boundary samples, independent picks, frozen old metrics, direct fallback and timeline reset')
+console.log('PASS preferred one-frame backdating, seven-point 1.5-times backgrounds, shared boundary samples, independent picks, frozen old metrics, direct fallback and timeline reset')
 
 // Either of the top two PGA values can renew a pick, including filling the second observation.
 const tracking = replayPgas([...quietPgas, 2.5])
@@ -716,7 +731,7 @@ for(const initialPgv of [0, 140]) {
 }
 console.log('PASS final-frame PGA/PGV metrics, null active triggers, pending merge, frozen old picks and independent subsequent picks')
 
-for(const [level, activity] of [[-1, 0], [0, 0], [5, 0], [6, 0.1], [7, 0.5], [8, 1], [9, 1.5], [10, 2], [11, 2], [20, 2]]) {
+for(const [level, activity] of [[-1, 0], [0, 0], [5, 0], [6, 0.2], [7, 0.5], [8, 1], [9, 1.5], [10, 2], [11, 2], [20, 2]]) {
     const station = new PalertStation(null, 'W001', [24, 121], true)
     station.update({ timestamp: stamp, pga: null, pgv: null, level }, 0, false)
     assert.equal(station.activity, activity)
@@ -732,7 +747,7 @@ for(let second = 0; second <= 60; second++) {
 }
 assert.equal(originalPalertActivity(ratioStation.recentData), 1, 'This fixture previously gained activity from the PGA ratio')
 assert.equal(ratioStation.level, 6)
-assert.equal(ratioStation.activity, 0.1, 'Level six grants only its level-based activity despite the high PGA ratio')
+assert.equal(ratioStation.activity, 0.2, 'Level six grants only its level-based activity despite the high PGA ratio')
 assert(!ratioStation.isPenaltyStation(), 'Level six excludes a penalty candidate')
 for(let second = 61; second <= 120; second++) {
     ratioStation.update({ timestamp: stamp + second * 1000, pga: 0.05, pgv: null, level: 0 }, 0, false)
@@ -827,36 +842,67 @@ for(const reset of ['clearRecentData', 'clearHistory']) {
 }
 console.log('PASS penalty initialization, ten-second readiness, five-percent boundary, three-frame gaps, timestamp gaps and resets')
 
-const runDetection = new Function('stations', 'adjStationIds', 'triggerDiffToleranceMatrix',
+const runDetection = new Function('stations', 'adjStationIds', 'triggerDiffToleranceMatrix', 'settingsStore', 'compareFloat',
     section(componentSource, 'const hasValidTriggerStamp =', 'const updateMaxShindo =') + '\nreturn detectActiveStations()')
 const detectStations = (stations, adjacency, tolerances = Object.fromEntries(Object.entries(adjacency)
-    .map(([id, neighbors]) => [id, Object.fromEntries(neighbors.map(neighbor => [neighbor, 2000]))]))) =>
-    runDetection(stations, adjacency, tolerances)
-for(const [neighborCount, activities, shouldActivate] of [
-    [20, [2, 1], false], [20, [2, 1.5], true],
-    [28, [2, 1.5], true], [29, [2, 1.5], false],
-    [36, [2, 2, ...Array(4).fill(0.1)], false], [36, [2, 2, ...Array(5).fill(0.1)], true],
-    [40, [2, 2, 0.5], false], [40, [2, 2, 1], true]
+    .map(([id, neighbors]) => [id, Object.fromEntries(neighbors.map(neighbor => [neighbor, 2000]))])), sensitivity = 1) =>
+    runDetection(stations, adjacency, tolerances, { mainSettings: { displaySeisNet: { palertSensitivity: sensitivity } } }, compareFloat)
+// Existing replay cases retain their original 3.5 / 0.125 thresholds, now standard sensitivity.
+for(const [sensitivity, neighborCount, activities, shouldActivate] of [
+    [1, 20, [2, 1], false], [1, 20, [2, 1.5], true],
+    [1, 28, [2, 1.5], true], [1, 29, [2, 1.5], false],
+    [1, 36, [2, 2, ...Array(2).fill(0.2)], false], [1, 36, [2, 1.5, ...Array(5).fill(0.2)], true],
+    [1, 40, [2, 2, 0.5], false], [1, 40, [2, 2, 1], true],
+    [2, 20, [2, 0.5, ...Array(2).fill(0.2)], false], [2, 20, [2, 1], true],
+    [2, 30, [2, 1], true], [2, 31, [2, 1], false],
+    [2, 33, [2, 1, 0.2], false], [2, 33, [2, 0.5, ...Array(4).fill(0.2)], true],
+    [2, 35, [2, 1, ...Array(2).fill(0.2)], false], [2, 35, [2, 0.5, ...Array(5).fill(0.2)], true],
+    [2, 40, [2, 1.5], false], [2, 40, [2, 2], true],
+    [3, 20, [2, ...Array(2).fill(0.2)], false], [3, 20, [2, 0.5], true],
+    [3, 31, [2, 0.5], true], [3, 32, [2, 0.5], false],
+    [3, 35, [2, 0.5, 0.2], false], [3, 35, [2, ...Array(4).fill(0.2)], true],
+    [3, 40, [2, 0.5, ...Array(3).fill(0.2)], false], [3, 40, [2, 1, 0.2], true],
+    [3, 45, [2, 1.5], false], [3, 45, [2, 1, ...Array(3).fill(0.2)], true],
+    [3, 50, [2, 1.5, ...Array(2).fill(0.2)], false], [3, 50, [2, 2], true]
 ]) {
     const detectionStations = Object.fromEntries(Array.from({ length: neighborCount }, (_, index) => [String(index), {
         id: String(index), activity: activities[index] ?? 0, isActive: false, triggerStamp: stamp
     }]))
     const neighbors = Object.keys(detectionStations)
     const adjacency = Object.fromEntries(neighbors.map(id => [id, neighbors]))
-    assert.equal(detectStations(detectionStations, adjacency).size, shouldActivate ? activities.length : 0)
+    assert.equal(detectStations(detectionStations, adjacency, undefined, sensitivity).size,
+        shouldActivate ? activities.length : 0, `Sensitivity ${sensitivity}, ${neighborCount} neighbors`)
 }
-console.log('PASS detection activity threshold at 12.5 percent of neighbors with a minimum of 3.5')
+for(const isActive of [false, true]) {
+    const stations = { A: { id: 'A', activity: 2, level: 10, isActive, triggerStamp: stamp },
+        B: { id: 'B', activity: 2, level: 10, isActive, triggerStamp: stamp } }
+    assert.equal(detectStations(stations, { A: ['A', 'B'], B: ['A', 'B'] }, undefined, 0).size, 0,
+        'Disabled detection neither starts nor renews an active chain')
+}
+{
+    const stations = { A: { id: 'A', activity: 2, triggerStamp: stamp },
+        B: { id: 'B', activity: 1, triggerStamp: stamp } }
+    const adjacency = { A: ['A', 'B'], B: ['A', 'B'] }
+    const tolerances = { A: { A: 2000, B: 2000 }, B: { A: 2000, B: 2000 } }
+    const settingsStore = { mainSettings: { displaySeisNet: { palertSensitivity: 1 } } }
+    for(const [sensitivity, expectedCount] of [[1, 0], [2, 2], [0, 0], [3, 2], [1, 0]]) {
+        settingsStore.mainSettings.displaySeisNet.palertSensitivity = sensitivity
+        assert.equal(runDetection(stations, adjacency, tolerances, settingsStore, compareFloat).size, expectedCount,
+            'The next detection reads the current sensitivity without recreating stations')
+    }
+}
+console.log('PASS all P-Alert sensitivity boundaries, disabled detection and live setting changes')
 
 // Replay the stale-trigger reactivation case through the actual station timers and detector.
 {
     let now = stamp - 8000, timerId = 0
     const timers = new Map()
-    const TimedStation = new Function('settingsStore', 'markRaw', 'getShindoFromLevel', 'setTimeout', 'clearTimeout',
+    const TimedStation = new Function('settingsStore', 'markRaw', 'getShindoFromLevel', 'setTimeout', 'clearTimeout', 'compareFloat',
         section(read('src/classes/StationClasses.js'), 'export class PalertStation', 'export class TremStation')
             .replace('export ', '') + '\nreturn PalertStation;')(
         { mainSettings: { displaySeisNet: { palertLevelHold: 1 } } }, value => value, value => value,
         (callback, delay) => { const id = ++timerId; timers.set(id, { callback, due: now + delay }); return id },
-        id => timers.delete(id)
+        id => timers.delete(id), compareFloat
     )
     const ids = Array.from({ length: 7 }, (_, index) => `noise-${index}`)
     const stationMap = Object.fromEntries(ids.map(id => [id, new TimedStation(null, id, [24, 121], true)]))
@@ -869,7 +915,7 @@ console.log('PASS detection activity threshold at 12.5 percent of neighbors with
         for(const station of stations) station.update({ timestamp: now, pga, level: getPalertLevelFromPgaPgv(pga, null) }, 0, false)
         for(const station of detectStations(stationMap, adjacency)) station.setActive()
         if(second === 0) assert(stations.every(station => station.isActive && station.triggerStamp === stamp))
-        if(second === 24) assert(stations.every(station => !station.isActive && station.activity === 0.1 && station.triggerStamp === null))
+        if(second === 24) assert(stations.every(station => !station.isActive && station.activity === 0.2 && station.triggerStamp === null))
         if(second === 25) assert(stations.every(station => !station.isActive && station.activity === 0.5 && station.triggerStamp === null),
             'Seven weak fluctuations cannot reuse old compatible timestamps to reactivate the network')
         if(second === 26) assert(stations.every(station => station.isActive && station.triggerStamp === now),
@@ -1510,13 +1556,52 @@ delete globalThis.__palertAdjStations
 // Use controlled distances to check the inclusive bound without spherical floating-point rounding.
 const boundaryStations = Object.fromEntries([['center', 0], ['atLimit', 100], ['outsideLimit', 100.001]].map(([id, distance]) =>
     [id, { id, latLng: [distance, 0] }]))
-const boundaryAdjacency = new Function('stations', 'calcDistanceKm', 'calcBearingDeg', `
+const buildControlledAdjacency = new Function('stations', 'calcDistanceKm', 'calcBearingDeg', `
     ${section(componentSource, 'const bearingDirections =', 'const isHypocenterEnabled =')}
     ${section(componentSource, 'const calcBearingDirection =', 'const clearTimelineState =')}
-    return buildAdjStations();`
-)(boundaryStations, ([from], [to]) => Math.abs(to - from), ([from], [to]) => to >= from ? 0 : 180)
+    return buildAdjStations();`)
+const controlledAdjacency = stations => buildControlledAdjacency(stations,
+    ([from], [to]) => Math.abs(to - from), ([from], [to]) => to >= from ? 0 : 180)
+const boundaryAdjacency = controlledAdjacency(boundaryStations)
 assert.deepEqual(boundaryAdjacency.hypocenterAdjStations.center.map(station => station.stationId), ['center', 'atLimit'])
-console.log('PASS unchanged activation/density, three nearest inference neighbors per direction and inclusive 100 km boundary')
+console.log('PASS dense activation neighborhoods, unchanged density, three nearest inference neighbors per direction and inclusive 100 km boundary')
+
+for(const [description, entries, expected] of [
+    ['isolated station retains itself', [['center', 0]], ['center']],
+    ['includes 40 km and stops when fewer than four are available',
+        [['center', 0], ['at40', 40], ['outside40', 40.001], ['near', 35]], ['center', 'near', 'at40']],
+    ['selects only the three nearest supplements',
+        [['center', 0], ['far', 39], ['middle', 35], ['nearest', 31], ['third', 38]], ['center', 'nearest', 'middle', 'third']],
+    ['counts self and the inclusive 30 km edge before filling one slot',
+        [['center', 0], ['at30', 30], ['local', 10], ['nearest', 35], ['extra', 36]], ['center', 'local', 'at30', 'nearest']],
+    ['does not supplement an existing four-station neighborhood',
+        [['center', 0], ['one', 5], ['two', 10], ['three', 15], ['outside', 35]], ['center', 'one', 'two', 'three']],
+    ['keeps every local station when more than four are present',
+        [['center', 0], ['one', 5], ['two', 10], ['three', 15], ['four', 20], ['at30', 30], ['outside', 35]],
+        ['center', 'one', 'two', 'three', 'four', 'at30']]
+]) {
+    const controlledStations = Object.fromEntries(entries.map(([id, distance]) => [id, { id, latLng: [distance, 0] }]))
+    const adjacency = controlledAdjacency(controlledStations)
+    assert.deepEqual(adjacency.detectionAdjStations.center, expected, description)
+    assert.deepEqual(Object.keys(adjacency.triggerDiffTolerances.center), expected, 'Supplemental edges also receive trigger tolerances')
+    for(const id of expected) {
+        assert.equal(adjacency.triggerDiffTolerances.center[id], controlledStations[id].latLng[0] / 3.5 * 1000 + 2000)
+    }
+    const localCount = entries.filter(([, distance]) => distance <= 30).length
+    assert.equal(FindPalertHypocenter.calcStationDensityWeights(adjacency.hypocenterAdjStations).center,
+        1 / Math.sqrt(localCount), 'Activation supplements cannot increase the 30 km density count')
+}
+{
+    const stations = Object.fromEntries([['center', 0], ['one', 35], ['two', 36], ['three', 37], ['extra', 38]]
+        .map(([id, distance]) => [id, { id, latLng: [distance, 0], activity: id === 'extra' ? 0 : 1, triggerStamp: stamp }]))
+    const adjacency = controlledAdjacency(stations)
+    assert.deepEqual(adjacency.detectionAdjStations.center, ['center', 'one', 'two', 'three'])
+    assert(!adjacency.detectionAdjStations.one.includes('center'), 'Each center fills independently; dense neighbors need no reverse edge')
+    const detected = detectStations(stations, adjacency.detectionAdjStations, adjacency.triggerDiffTolerances, 1)
+    assert.deepEqual([...detected].map(station => station.id).toSorted(), ['center', 'one', 'three', 'two'],
+        'Supplemental neighbors contribute activity and support compatible chain activation')
+}
+console.log('PASS four-station activation minimum, nearest-first supplements, inclusive 30/40 km bounds, sparse limits and independent rows')
 
 // Run NIED's actual initialization code with sparse and dense directions.
 const buildNiedAdjacency = new Function('stationList', 'calcDistanceKm', 'calcBearingDeg', `
@@ -1551,7 +1636,7 @@ globalThis.__palertDisplayDeps = {
     settingsStore: { mainSettings: { displaySeisNet: { palertHypoInfAlwaysOn: false } }, effectivePalertHypoInfTextInfo: 1 },
     activeEewList: []
 }
-const displaySource = `import { calcLngDiff, timeToStamp } from '@/utils/Utils';
+const displaySource = `import { calcLngDiff, compareFloat, timeToStamp } from '@/utils/Utils';
 const { settingsStore, activeEewList } = globalThis.__palertDisplayDeps;
 const inferredHypocenterLabelOffset = 24;
 ${section(componentSource, 'const minDisplayedHypocenterQualityScore =', 'const bearingDirections =')}
@@ -1628,7 +1713,7 @@ for(const name of ['Palert', 'Nied']) {
         }
     }
     globalThis.__hypocenterRendererDeps = renderDeps
-    const rendererSource = `import { calcWaveDistance, calcLngDiff, timeToStamp, stampToTime } from '@/utils/Utils';
+    const rendererSource = `import { calcWaveDistance, calcLngDiff, compareFloat, timeToStamp, stampToTime } from '@/utils/Utils';
     import travelTimes from '@/utils/TravelTimes';
     const { L, settingsStore, statusStore, isHypocenterEnabled } = globalThis.__hypocenterRendererDeps;
     const activeEewList = [], infHypoIcon = {}, latestFrameStamp = ${stamp + 20000}, updateStamp = latestFrameStamp;
@@ -1841,6 +1926,17 @@ const useAccessStore = () => ({ canUse: name => capabilities.has(name) });
 ${read('src/stores/settings.js').replace(/^import .*;\r?\n/gm, '')}`
 const { useSettingsStore: settingsDefinition } = await load('src/stores/test-palert-settings.js', settingsSource)
 const settings = Object.assign(settingsDefinition.state(), settingsDefinition.actions)
+assert.equal(settings.mainSettings.displaySeisNet.palertSensitivity, 1, 'New settings default to standard sensitivity')
+settings.setMainSettings(JSON.stringify({ displaySeisNet: { palertNet: true } }))
+assert.equal(settings.mainSettings.displaySeisNet.palertSensitivity, 1, 'Older settings restore standard sensitivity')
+for(const sensitivity of [0, 1, 2, 3]) {
+    settings.setMainSettings(JSON.stringify({ displaySeisNet: { palertSensitivity: sensitivity } }))
+    settings.setMainSettings(JSON.stringify(settings.mainSettings))
+    assert.equal(settings.mainSettings.displaySeisNet.palertSensitivity, sensitivity,
+        'Sensitivity survives settings serialization and restoration, including disabled')
+}
+settings.setMainSettings(JSON.stringify({ displaySeisNet: { palertSensitivity: '2' } }))
+assert.equal(settings.mainSettings.displaySeisNet.palertSensitivity, 1, 'Invalid setting types restore standard sensitivity')
 assert.equal(settings.mainSettings.displaySeisNet.httpDataPriority, 'realtime')
 settings.setMainSettings(JSON.stringify({ displaySeisNet: { httpDataPriority: 'complete' } }))
 assert.equal(settings.mainSettings.displaySeisNet.httpDataPriority, 'complete')

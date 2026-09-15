@@ -28,6 +28,32 @@
                                 <el-switch v-model="settingsStore.mainSettings.displaySeisNet.displayPalertShindo" :disabled="!settingsStore.mainSettings.displaySeisNet.palertNet" />
                             </div>
                             <div class="switch-full pl-4">
+                                <span>
+                                    检知灵敏度
+                                    <el-popover
+                                        placement="top"
+                                        :width="300"
+                                        trigger="hover"
+                                    >
+                                        <template #reference>
+                                            <question-filled width="1em" height="1em" />
+                                        </template>
+                                        <p>越高灵敏度，越容易检测到地震，但越容易误检测。</p>
+                                    </el-popover>
+                                </span>
+                                <el-select
+                                    v-model="settingsStore.mainSettings.displaySeisNet.palertSensitivity"
+                                    size="small"
+                                    :disabled="!settingsStore.mainSettings.displaySeisNet.palertNet"
+                                    style="width: 72px;"
+                                >
+                                    <el-option label="关闭" :value="0" />
+                                    <el-option label="标准" :value="1" />
+                                    <el-option label="高" :value="2" />
+                                    <el-option label="极高" :value="3" />
+                                </el-select>
+                            </div>
+                            <div class="switch-full pl-4">
                                 <span>震度显示保持</span>
                                 <el-select
                                     v-model="settingsStore.mainSettings.displaySeisNet.palertLevelHold"

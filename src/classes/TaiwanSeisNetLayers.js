@@ -82,7 +82,7 @@ export class TaiwanSeisNetLayers {
         }
         const gridMap = new Map()
         points.forEach(point => {
-            const indices = point.latLng.map((value, index) => Math.round(value - this.decimal[index]))
+            const indices = point.latLng.map((value, index) => Math.round(exactRound(value - this.decimal[index], 10)))
             const key = indices.join(',')
             const grid = gridMap.get(key)
             if(grid) {

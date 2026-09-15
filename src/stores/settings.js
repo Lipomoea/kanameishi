@@ -22,6 +22,7 @@ const createDefaultSettings = () => {
                 displayPeriodMaxInt: false,
                 httpDataPriority: 'realtime',
                 palertNet: false,
+                palertSensitivity: 1,
                 palertLevelHold: 1,
                 palertHypoInf: false,
                 palertHypoInfAlwaysOn: false,

@@ -1,4 +1,4 @@
-import { calcDistanceKm, calcLngDiff, calcReachTime, exactRound } from '@/utils/Utils'
+import { calcDistanceKm, calcLngDiff, calcReachTime, compareFloat, exactRound } from '@/utils/Utils'
 
 const sortedInactiveStationsCacheKey = Symbol('sortedInactiveStations')
 const compareStrings = (value1, value2) => {
@@ -1500,8 +1500,8 @@ export class FindHypocenter {
         if(!Number.isFinite(result1.originStamp) || !Number.isFinite(result2.originStamp)) return false
         const hypo1 = result1.hypocenter
         const hypo2 = result2.hypocenter
-        return Math.abs(hypo1.lat - hypo2.lat) <= this.parameters.clusterMergeThreshold.lat &&
-            calcLngDiff(hypo1.lng, hypo2.lng) <= this.parameters.clusterMergeThreshold.lng &&
+        return compareFloat(Math.abs(hypo1.lat - hypo2.lat), this.parameters.clusterMergeThreshold.lat) <= 0 &&
+            compareFloat(calcLngDiff(hypo1.lng, hypo2.lng), this.parameters.clusterMergeThreshold.lng) <= 0 &&
             Math.abs(hypo1.depth - hypo2.depth) <= this.parameters.clusterMergeThreshold.depth &&
             Math.abs(result1.originStamp - result2.originStamp) <= this.parameters.clusterMergeThreshold.originStamp
     }

@@ -1,6 +1,6 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { getCsisLevelFromCsis, getLevelFromInstShindo, getMmiFromKmaLevel, getShindoFromChar, getShindoFromInstShindo, getShindoFromLevel, intScale, shindoScale } from '@/utils/Utils';
+import { compareFloat, getCsisLevelFromCsis, getLevelFromInstShindo, getMmiFromKmaLevel, getShindoFromChar, getShindoFromInstShindo, getShindoFromLevel, intScale, shindoScale } from '@/utils/Utils';
 import { useSettingsStore } from '@/stores/settings';
 import { markRaw, ref } from 'vue';
 import '@/assets/background.css';
@@ -316,7 +316,7 @@ export class PalertStation {
         if(maxLevel >= 9) return 1.5
         if(maxLevel >= 8) return 1
         if(maxLevel >= 7) return 0.5
-        if(maxLevel >= 6) return 0.1
+        if(maxLevel >= 6) return 0.2
         return 0
     }
     updateTrigger(sample){
@@ -335,13 +335,13 @@ export class PalertStation {
             const previous = this.recentData[1]
             // Either sample may reach level six; prefer the preceding sample as onset, including a completed pick's final sample.
             if((level >= 6 || previous.level >= 6) && previous.pga > 0 &&
-                pga >= backgroundMaxPga * 1.5 && previous.pga >= backgroundMaxPga * 1.5) {
+                compareFloat(pga, backgroundMaxPga * 1.5) >= 0 && compareFloat(previous.pga, backgroundMaxPga * 1.5) >= 0) {
                 this.triggerStamp = previous.timestamp
                 this.maxLevel = previous.level
                 this.triggerMaxPga = previous.pga
             }
             else {
-                if(level < 6 || pga <= 0 || pga < Math.max(backgroundMaxPga, previous.pga) * 2) return
+                if(level < 6 || pga <= 0 || !(compareFloat(pga, Math.max(backgroundMaxPga, previous.pga) * 2) >= 0)) return
                 this.triggerStamp = timestamp
             }
         }
