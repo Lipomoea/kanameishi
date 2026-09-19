@@ -7,7 +7,8 @@
 <script setup>
 import { reactive, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue';
 import Http from '@/classes/Http';
-import { StationFrameQueue } from '@/utils/StationFrameQueue';
+import { StationFrameQueue } from '@/features/stations/StationFrameQueue';
+import { isNetworkPeriodActive } from '@/features/eew/EewNetworkRelations';
 import { useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
 import { seisNetUrls, iconUrls } from '@/utils/Urls';
@@ -208,7 +209,7 @@ watch(()=>statusStore.map, newVal=>{
     }
 }, { immediate: true })
 unwatchDelay = watch(delay, scheduleTimelineSwitch)
-watch(()=>(statusStore.isActive.cwaEew || statusStore.isActive.tremNet), newVal=>{
+watch(() => isNetworkPeriodActive('tremNet', statusStore.isActive), newVal=>{
     if(newVal){
         if(periodMaxLevel == -1){
             periodMaxLevel = 0

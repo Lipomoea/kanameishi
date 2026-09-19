@@ -41,7 +41,7 @@ const load = async (name, source) => {
     if(module.status === 'linked') await module.evaluate()
     return module.namespace
 }
-const { createPalertHypocenterUpdate, mergePalertHypocenterUpdates } = await load('src/utils/PalertHypocenterUpdates.js')
+const { createPalertHypocenterUpdate, mergePalertHypocenterUpdates } = await load('src/features/stations/PalertHypocenterUpdates.js')
 const { FindPalertHypocenter } = await load('src/classes/PalertHypoInf.js')
 const { FindNiedHypocenter } = await load('src/classes/NiedHypoInf.js')
 const { palertHypocenterProfile: profile } = await load('src/classes/PalertHypocenterProfile.js')
@@ -69,7 +69,7 @@ const tables = (await load('src/utils/TravelTimes.js')).default
 const componentSource = read('src/components/components/PalertNet.vue')
 const niedComponentSource = read('src/components/components/NiedNet.vue')
 const tremComponentSource = read('src/components/components/TremNet.vue')
-const { StationFrameQueue } = await load('src/utils/StationFrameQueue.js')
+const { StationFrameQueue } = await load('src/features/stations/StationFrameQueue.js')
 const queueProbe = (ordered = true) => {
     const committed = []
     const queue = new StationFrameQueue(frame => committed.push(frame.timestamp), () => ordered)
@@ -1267,7 +1267,7 @@ globalThis.__palertClientDeps = {
     clearInferredHypocenters: () => { clearCount++ },
     isHypocenterEnabled: { value: true }
 }
-const clientSource = `import { mergePalertHypocenterUpdates } from '@/utils/PalertHypocenterUpdates';
+const clientSource = `import { mergePalertHypocenterUpdates } from '@/features/stations/PalertHypocenterUpdates';
 const { Worker, renderInferredHypocenters, clearInferredHypocenters, isHypocenterEnabled } = globalThis.__palertClientDeps;
 let hypocenterWorker = null, hypocenterRequestId = 0, inFlightHypocenterRequestId = null, pendingHypocenterUpdate = null;
 const adjStations4Hypo = {};
@@ -1315,7 +1315,7 @@ globalThis.__niedClientDeps = {
     clearInferredHypocenters: () => niedClearCount++,
     console: { error: error => niedErrors.push(error) }
 }
-const niedClientSource = `import { mergeNiedHypocenterUpdates } from '@/utils/NiedHypocenterUpdates';
+const niedClientSource = `import { mergeNiedHypocenterUpdates } from '@/features/stations/NiedHypocenterUpdates';
 const { Worker, renderInferredHypocenters, clearInferredHypocenters, console } = globalThis.__niedClientDeps;
 let hypocenterWorker = null, hypocenterRequestId = 0, inFlightHypocenterRequestId = null, pendingHypocenterUpdate = null;
 const adjStations4Hypo = {}, isNiedHypoInfEnabled = () => true;
@@ -1468,7 +1468,7 @@ globalThis.__palertFrameDeps = {
     terminateHypocenterWorker() {}, clearInferredHypocenters() {},
     updateInferredHypocentersInWorker: update => frameUpdates.push(update)
 }
-const frameSource = `import { createPalertHypocenterUpdate } from '@/utils/PalertHypocenterUpdates';
+const frameSource = `import { createPalertHypocenterUpdate } from '@/features/stations/PalertHypocenterUpdates';
 import { getPalertLevelFromPgaPgv, stampToTime } from '@/utils/Utils';
 const { stations, isHypocenterEnabled, watch, document, palertUpdateTime, useStationCanvasRenderer,
     detectActiveStations, updateMaxShindo, renderAll, terminateHypocenterWorker, clearInferredHypocenters,
@@ -1476,7 +1476,7 @@ const { stations, isHypocenterEnabled, watch, document, palertUpdateTime, useSta
 let stopped = false, requestGeneration = 0, pendingTimelineSwitch = false, latestFrameStamp = null, pendingRender = false;
 ${section(componentSource, 'const normalizeMeasurement =', 'const parseTimestamp =')}
 ${section(componentSource, 'const commitFrame =', 'const getHypocenterWorker =')}
-const stopWatch = ${section(componentSource, 'watch(isHypocenterEnabled,', 'watch(() => statusStore.isActive.cwaEew')}
+const stopWatch = ${section(componentSource, 'watch(isHypocenterEnabled,', 'watch(() => isNetworkPeriodActive')}
 export { commitFrame, stopWatch };`
 const frameLoop = await load('src/components/components/test-palert-frame-loop.js', frameSource)
 for(let second = -8; second < 0; second++) {
@@ -1636,10 +1636,9 @@ globalThis.__palertDisplayDeps = {
     settingsStore: { mainSettings: { displaySeisNet: { palertHypoInfAlwaysOn: false } }, effectivePalertHypoInfTextInfo: 1 },
     activeEewList: []
 }
-const displaySource = `import { calcLngDiff, compareFloat, timeToStamp } from '@/utils/Utils';
+const displaySource = `import { shouldDisplayInferredHypocenter } from '@/features/eew/EewNetworkRelations';
 const { settingsStore, activeEewList } = globalThis.__palertDisplayDeps;
 const inferredHypocenterLabelOffset = 24;
-${section(componentSource, 'const minDisplayedHypocenterQualityScore =', 'const bearingDirections =')}
 ${section(componentSource, 'const getPickDisplayWave =', 'const layoutInferredHypocenterLabels =')}
 export { shouldDisplayHypocenterResult, createInfLabelHtml, getPickDisplayWave };`
 const display = await load('src/components/components/test-palert-display.js', displaySource)
@@ -1713,15 +1712,14 @@ for(const name of ['Palert', 'Nied']) {
         }
     }
     globalThis.__hypocenterRendererDeps = renderDeps
-    const rendererSource = `import { calcWaveDistance, calcLngDiff, compareFloat, timeToStamp, stampToTime } from '@/utils/Utils';
+    const rendererSource = `import { calcWaveDistance, stampToTime } from '@/utils/Utils';
+    import { shouldDisplayInferredHypocenter } from '@/features/eew/EewNetworkRelations';
     import travelTimes from '@/utils/TravelTimes';
     const { L, settingsStore, statusStore, isHypocenterEnabled } = globalThis.__hypocenterRendererDeps;
     const activeEewList = [], infHypoIcon = {}, latestFrameStamp = ${stamp + 20000}, updateStamp = latestFrameStamp;
     const isNiedHypoInfEnabled = () => isHypocenterEnabled.value;
     let inferredHypocenterMap = null, inferredHypocenterLayers = null, inferredHypocenterLabelLayers = [];
-    ${isPalert ? section(source, 'const inferredHypocenterLabelOffset =', 'const bearingDirections =') :
-        source.split('\n').find(line => line.startsWith('const inferredHypocenterLabelOffset =')) + '\n' +
-        section(source, 'const hypoInfEewMatchThreshold =', 'const isNiedHypoInfEnabled =')}
+    ${source.split('\n').find(line => line.startsWith('const inferredHypocenterLabelOffset ='))}
     ${isPalert ? section(source, 'const clearInferredHypocenters =', 'const fetchRealtimeData =') :
         section(source, 'const getPickDisplayWave =', 'const chainActivate =')}
     export { renderInferredHypocenters, destroyInferredHypocenterLayers };`
@@ -1768,10 +1766,12 @@ for(const name of ['Palert', 'Nied']) {
 console.log('PASS NIED/P-Alert wavePane and label styling, result replacement, map replacement, disabled display and layer/event cleanup')
 
 // Exercise the production map visibility expression across official/inferred results and the override.
+const { shouldDisplayNetworkGrid } = await load('src/features/eew/EewNetworkRelations.js')
 const gridExpression = read('src/components/MainMapComponent.vue').split('\n').find(line => line.includes('if(taiwanGridPane)'))
-const gridOpacity = new Function('statusStore', 'settingsStore', `const blinkOpac = 1, menuOpac = 1, taiwanGridPane = { style: {} }; ${gridExpression}; return taiwanGridPane.style.opacity;`)
+const gridOpacity = new Function('statusStore', 'alwaysDisplayGrid', 'shouldDisplayNetworkGrid',
+    `const blinkOpac = 1, menuOpac = 1, taiwanGridPane = { style: {} }; ${gridExpression}; return taiwanGridPane.style.opacity;`)
 for(const cwaEew of [false, true]) for(const palertInfHypo of [false, true]) for(const alwaysDisplayGrid of [false, true]) {
-    const opacity = gridOpacity({ isActive: { cwaEew, palertInfHypo } }, { mainSettings: { displaySeisNet: { alwaysDisplayGrid } } })
+    const opacity = gridOpacity({ isActive: { cwaEew, palertInfHypo } }, alwaysDisplayGrid, shouldDisplayNetworkGrid)
     assert.equal(opacity, alwaysDisplayGrid || (!cwaEew && !palertInfHypo) ? 1 : 0)
 }
 console.log('PASS shared Taiwan grid visibility and always-display override')

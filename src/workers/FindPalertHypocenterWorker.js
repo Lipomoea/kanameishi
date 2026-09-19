@@ -1,5 +1,5 @@
 import { FindPalertHypocenter } from '@/classes/PalertHypoInf'
-import { mergePalertHypocenterUpdates } from '@/utils/PalertHypocenterUpdates'
+import { mergePalertHypocenterUpdates } from '@/features/stations/PalertHypocenterUpdates'
 
 let finder = null
 let adjStations = {}

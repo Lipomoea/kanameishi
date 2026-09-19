@@ -383,6 +383,8 @@ import { eewSources, eqlistSources, seisNetSources, sourceTypes, tsunamiSources,
 import { useSettingsStore } from '@/stores/settings';
 import { useAccessStore } from '@/stores/access';
 import { useTimeStore } from '@/stores/time';
+import { getGridNetworkRelation, shouldDisplayNetworkGrid, shouldIncludeEewSWaveBounds } from '@/features/eew/EewNetworkRelations';
+import { extendLayerBounds, collectFilledAreaBounds, collectStrokedAreaBounds } from '@/features/map/MapViewBounds';
 import EqlistComponent from './EqlistComponent.vue';
 import SettingsComponent from './SettingsComponent.vue';
 import { verifyUpToDate, setClassName, getClassLevel, classNameArray, pointDistToCnArea, pointDistToKrArea, csisArray, shindoArray, calcCsisLevel, calcJmaShindoLevel, formatTimeZone, simplifyTopoJson, formatCsis, csisRomanArray, formatShindo, stampToTime, systemTimeZone } from '@/utils/Utils';
@@ -1178,9 +1180,10 @@ watchEffect(() => {
     const menuOpac = menuId.value == 'eqlists' ? 0.3 : 1
     // 你不许使用可选链符号（不然报错）
     if(eewMarkerPane) eewMarkerPane.style.opacity = blinkOpac * menuOpac
-    if(taiwanGridPane) taiwanGridPane.style.opacity = blinkOpac * menuOpac * (settingsStore.mainSettings.displaySeisNet.alwaysDisplayGrid || !(statusStore.isActive.cwaEew || statusStore.isActive.palertInfHypo) ? 1 : 0)
-    if(niedGridPane) niedGridPane.style.opacity = blinkOpac * menuOpac * (settingsStore.mainSettings.displaySeisNet.alwaysDisplayGrid || !(statusStore.isActive.jmaEew || statusStore.isActive.niedInfHypo) ? 1 : 0)
-    if(kmaGridPane) kmaGridPane.style.opacity = blinkOpac * menuOpac * (!statusStore.isActive.kmaEew || settingsStore.mainSettings.displaySeisNet.alwaysDisplayGrid ? 1 : 0)
+    const alwaysDisplayGrid = settingsStore.mainSettings.displaySeisNet.alwaysDisplayGrid
+    if(taiwanGridPane) taiwanGridPane.style.opacity = blinkOpac * menuOpac * (shouldDisplayNetworkGrid('taiwanGridPane', statusStore.isActive, alwaysDisplayGrid) ? 1 : 0)
+    if(niedGridPane) niedGridPane.style.opacity = blinkOpac * menuOpac * (shouldDisplayNetworkGrid('niedGridPane', statusStore.isActive, alwaysDisplayGrid) ? 1 : 0)
+    if(kmaGridPane) kmaGridPane.style.opacity = blinkOpac * menuOpac * (shouldDisplayNetworkGrid('kmaGridPane', statusStore.isActive, alwaysDisplayGrid) ? 1 : 0)
 })
 const intervalEvents = ()=>{
     blinkStatus.value = !blinkStatus.value
@@ -1209,33 +1212,19 @@ const setView = (force = false) => {
         //临时Eqlist
         if(tempEqlists.value && menuId.value == 'eqlists' && historyList.length == 0) {
             if(tempEqlists.value == 'jmaTsunami') {
-                statusStore.isActive.jmaTsunami && jpTsunamiBaseMap?.eachLayer(layer => {
-                    if(layer.options.color && layer.options.color != tsunamiBaseMapDefaultStroke) {
-                        if(layer.getBounds){
-                            bounds.extend(layer.getBounds())
-                        }
-                        else if(layer.getLatLng){
-                            bounds.extend(layer.getLatLng())
-                        }
-                    }
-                })
+                if(statusStore.isActive.jmaTsunami) {
+                    bounds.extend(collectStrokedAreaBounds(jpTsunamiBaseMap, tsunamiBaseMapDefaultStroke))
+                }
                 if(!bounds.isValid()) {
-                    bounds.extend(jpTsunamiBaseMap?.getBounds())
+                    extendLayerBounds(bounds, jpTsunamiBaseMap)
                 }
             }
             else if(tempEqlists.value == 'nmefcTsunami') {
-                statusStore.isActive.nmefcTsunami && cnTsunamiBaseMap?.eachLayer(layer => {
-                    if(layer.options.color && layer.options.color != tsunamiBaseMapDefaultStroke) {
-                        if(layer.getBounds){
-                            bounds.extend(layer.getBounds())
-                        }
-                        else if(layer.getLatLng){
-                            bounds.extend(layer.getLatLng())
-                        }
-                    }
-                })
+                if(statusStore.isActive.nmefcTsunami) {
+                    bounds.extend(collectStrokedAreaBounds(cnTsunamiBaseMap, tsunamiBaseMapDefaultStroke))
+                }
                 if(!bounds.isValid()) {
-                    bounds.extend(cnTsunamiBaseMap?.getBounds())
+                    extendLayerBounds(bounds, cnTsunamiBaseMap)
                 }
             }
             else if(activeEqlistList.value.length > 0) {
@@ -1244,129 +1233,49 @@ const setView = (force = false) => {
                         bounds.extend(event.hypoLatLng)
                     }
                 })
-                eewBaseGroup.eachLayer(baseMap => {
-                    baseMap.eachLayer(layer => {
-                        if(layer.options.fillColor && layer.options.fillColor != eewBaseMapDefaultFill) {
-                            if(layer.getBounds){
-                                bounds.extend(layer.getBounds())
-                            }
-                            else if(layer.getLatLng){
-                                bounds.extend(layer.getLatLng())
-                            }
-                        }
-                    })
-                })
+                bounds.extend(collectFilledAreaBounds(eewBaseGroup, eewBaseMapDefaultFill))
             }
         }
         else {
             //Eew和SeisNet
             if(menuId.value != 'eqlists') {
                 map.eachLayer(layer => {
-                    let shouldExtend = false
-                    switch(layer.options.pane) {
-                        case 'eewMarkerPane':
-                            shouldExtend = true
-                            break
-                        case 'taiwanGridPane':
-                        case 'niedGridPane':
-                        case 'kmaGridPane':
-                            if(layer.options.isGridCanvasLayer && layer.hasGrid?.()) {
-                                shouldExtend = true
-                                stableMode = true
-                            }
-                            break
-                    }
-                    if(shouldExtend) {
-                        if(layer.getBounds){
-                            bounds.extend(layer.getBounds())
-                        }
-                        else if(layer.getLatLng){
-                            bounds.extend(layer.getLatLng())
-                        }
-                    }
+                    const isDetectionGrid = getGridNetworkRelation(layer.options.pane) &&
+                        layer.options.isGridCanvasLayer && layer.hasGrid?.()
+                    const shouldExtend = layer.options.pane == 'eewMarkerPane' || isDetectionGrid
+                    if(isDetectionGrid) stableMode = true
+                    if(shouldExtend) extendLayerBounds(bounds, layer)
                 })
                 activeEewList.forEach(event => {
-                    let sWaveFill = null
-                    switch(event.eqMessage.source) {
-                        case 'jmaEew':
-                            if(!statusStore.isActive.niedNet)
-                                sWaveFill = event.sWaveFill
-                            break
-                        case 'cwaEew':
-                            if(!(statusStore.isActive.tremNet || statusStore.isActive.palertNet))
-                                sWaveFill = event.sWaveFill
-                            break
-                        case 'kmaEew':
-                            if(!statusStore.isActive.kmaNet)
-                                sWaveFill = event.sWaveFill
-                            break
-                        default:
-                            sWaveFill = event.sWaveFill
-                            break
+                    if(event.sWaveFill && shouldIncludeEewSWaveBounds(event.eqMessage.source, statusStore.isActive)) {
+                        extendLayerBounds(bounds, event.sWaveFill)
                     }
-                    if(sWaveFill) bounds.extend(sWaveFill.getBounds())
                 })
             }
             //历史地震
             if(!bounds.isValid() && menuId.value == 'eqlists' && historyList.length > 0) {
                 map.eachLayer(layer => {
                     if(layer.options.pane == 'historyMarkerPane' || layer.options.pane?.includes('intReportStationPane')) {
-                        bounds.extend(layer.getLatLng())
+                        extendLayerBounds(bounds, layer)
                     }
                 })
-                eewBaseGroup.eachLayer(baseMap => {
-                    baseMap.eachLayer(layer => {
-                        if(layer.options.fillColor && layer.options.fillColor != eewBaseMapDefaultFill) {
-                            if(layer.getBounds){
-                                bounds.extend(layer.getBounds())
-                            }
-                            else if(layer.getLatLng){
-                                bounds.extend(layer.getLatLng())
-                            }
-                        }
-                    })
-                })
+                bounds.extend(collectFilledAreaBounds(eewBaseGroup, eewBaseMapDefaultFill))
             }
             //活跃的Eqlist和Tsunami
             if(!bounds.isValid() && menuId.value != 'eews') {
-                statusStore.isActive.jmaTsunami && jpTsunamiBaseMap?.eachLayer(layer => {
-                    if(layer.options.color && layer.options.color != tsunamiBaseMapDefaultStroke) {
-                        if(layer.getBounds){
-                            bounds.extend(layer.getBounds())
-                        }
-                        else if(layer.getLatLng){
-                            bounds.extend(layer.getLatLng())
-                        }
-                    }
-                })
-                statusStore.isActive.nmefcTsunami && cnTsunamiBaseMap?.eachLayer(layer => {
-                    if(layer.options.color && layer.options.color != tsunamiBaseMapDefaultStroke) {
-                        if(layer.getBounds){
-                            bounds.extend(layer.getBounds())
-                        }
-                        else if(layer.getLatLng){
-                            bounds.extend(layer.getLatLng())
-                        }
-                    }
-                })
+                if(statusStore.isActive.jmaTsunami) {
+                    bounds.extend(collectStrokedAreaBounds(jpTsunamiBaseMap, tsunamiBaseMapDefaultStroke))
+                }
+                if(statusStore.isActive.nmefcTsunami) {
+                    bounds.extend(collectStrokedAreaBounds(cnTsunamiBaseMap, tsunamiBaseMapDefaultStroke))
+                }
                 if(activeEqlistList.value.length > 0) {
                     activeEqlistList.value.forEach(event=>{
                         if(event.isValidHypo){
                             bounds.extend(event.hypoLatLng)
                         }
                     })
-                    eewBaseGroup.eachLayer(baseMap => {
-                        baseMap.eachLayer(layer => {
-                            if(layer.options.fillColor && layer.options.fillColor != eewBaseMapDefaultFill) {
-                                if(layer.getBounds){
-                                    bounds.extend(layer.getBounds())
-                                }
-                                else if(layer.getLatLng){
-                                    bounds.extend(layer.getLatLng())
-                                }
-                            }
-                        })
-                    })
+                    bounds.extend(collectFilledAreaBounds(eewBaseGroup, eewBaseMapDefaultFill))
                 }
             }
             //不活跃的Eqlist
@@ -1390,18 +1299,7 @@ const setView = (force = false) => {
                         }
                     }
                 })
-                eewBaseGroup.eachLayer(baseMap => {
-                    baseMap.eachLayer(layer => {
-                        if(layer.options.fillColor && layer.options.fillColor != eewBaseMapDefaultFill) {
-                            if(layer.getBounds){
-                                bounds.extend(layer.getBounds())
-                            }
-                            else if(layer.getLatLng){
-                                bounds.extend(layer.getLatLng())
-                            }
-                        }
-                    })
-                })
+                bounds.extend(collectFilledAreaBounds(eewBaseGroup, eewBaseMapDefaultFill))
                 if(!bounds.isValid()) {
                     candidates.forEach(latLng => bounds.extend(latLng))
                 }

@@ -7,19 +7,20 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue';
 import Http from '@/classes/Http';
-import { StationFrameQueue } from '@/utils/StationFrameQueue';
+import { StationFrameQueue } from '@/features/stations/StationFrameQueue';
+import { isNetworkPeriodActive, shouldDisplayInferredHypocenter } from '@/features/eew/EewNetworkRelations';
 import axios from 'axios';
 import { useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
 import { seisNetUrls, iconUrls } from '@/utils/Urls';
-import { getTimeNumberString, playSound, sendMyNotification, focusWindow, getShindoFromLevel, exactRound, timeToStamp, calcDistanceKm, calcBearingDeg, calcLngDiff, compareFloat, stampToTime, calcWaveDistance } from '@/utils/Utils';
+import { getTimeNumberString, playSound, sendMyNotification, focusWindow, getShindoFromLevel, exactRound, timeToStamp, calcDistanceKm, calcBearingDeg, stampToTime, calcWaveDistance } from '@/utils/Utils';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { abnormalNiedStations, NiedStation, simpleIcon } from '@/classes/StationClasses';
 import { NiedStationCanvasLayer } from '@/classes/StationCanvasLayer';
 import { NiedGridCanvasLayer } from '@/classes/GridCanvasLayer';
 import { niedSitePub } from '@/utils/NiedSitePub';
-import { mergeNiedHypocenterUpdates } from '@/utils/NiedHypocenterUpdates';
+import { mergeNiedHypocenterUpdates } from '@/features/stations/NiedHypocenterUpdates';
 import travelTimes from '@/utils/TravelTimes';
 import infHypoIconUrl from '@/assets/icon/hypocenter/infHypo.svg';
 
@@ -136,13 +137,6 @@ let hypocenterRequestId = 0
 let inFlightHypocenterRequestId = null
 let pendingHypocenterUpdate = null
 let updateStamp = null
-const hypoInfEewMatchThreshold = {
-    lat: 1,
-    lng: 1,
-    depth: 100,
-    originStamp: 10000
-}
-const minDisplayedHypocenterQualityScore = -3
 const isNiedHypoInfEnabled = () => 
     settingsStore.mainSettings.displaySeisNet.niedNet &&
     settingsStore.mainSettings.displaySeisNet.niedHypoInf
@@ -460,29 +454,9 @@ const createInferredHypocenterLabelLayer = (result, latLng, labelInfo) => {
         interactive: false
     }).addTo(inferredHypocenterLayers)
 }
-const shouldDisplayHypocenterResult = result => {
-    if(result.qualityScore < minDisplayedHypocenterQualityScore) return false
-    if(settingsStore.mainSettings.displaySeisNet.niedHypoInfAlwaysOn) return true
-    return !isMatchedWithActiveJmaEew(result)
-}
-const isMatchedWithActiveJmaEew = result => {
-    if(!Array.isArray(activeEewList)) return false
-    return activeEewList.some(event => isCloseToJmaEewHypocenter(result, event?.eqMessage))
-}
-const isCloseToJmaEewHypocenter = (result, eqMessage) => {
-    if(eqMessage?.source !== 'jmaEew') return false
-    if(eqMessage.isAssumption || eqMessage.isCanceled) return false
-    if(!Number.isFinite(result?.originStamp)) return false
-    if(!Number.isFinite(eqMessage.lat) || !Number.isFinite(eqMessage.lng)) return false
-    if(!Number.isFinite(eqMessage.depth)) return false
-    const eewOriginStamp = timeToStamp(eqMessage.originTime, eqMessage.timeZone)
-    if(!Number.isFinite(eewOriginStamp) || eewOriginStamp <= 0) return false
-    const hypocenter = result.hypocenter
-    return compareFloat(Math.abs(hypocenter.lat - eqMessage.lat), hypoInfEewMatchThreshold.lat) <= 0 &&
-        compareFloat(calcLngDiff(hypocenter.lng, eqMessage.lng), hypoInfEewMatchThreshold.lng) <= 0 &&
-        Math.abs((hypocenter.depth ?? 10) - eqMessage.depth) <= hypoInfEewMatchThreshold.depth &&
-        Math.abs(result.originStamp - eewOriginStamp) <= hypoInfEewMatchThreshold.originStamp
-}
+const shouldDisplayHypocenterResult = result => shouldDisplayInferredHypocenter(
+    'niedNet', result, activeEewList, settingsStore.mainSettings.displaySeisNet.niedHypoInfAlwaysOn
+)
 const createInfLabelHtml = (result, labelInfo) => {
     const textInfoMode = settingsStore.effectiveNiedHypoInfTextInfo
     if(textInfoMode === 0) return ''
@@ -852,7 +826,7 @@ watch(()=>statusStore.map, newVal=>{
         )
     }
 }, { immediate: true })
-watch(()=>(statusStore.isActive.jmaEew || statusStore.isActive.niedNet), newVal=>{
+watch(() => isNetworkPeriodActive('niedNet', statusStore.isActive), newVal=>{
     if(newVal){
         if(periodMaxLevel == -1){
             periodMaxLevel = 0

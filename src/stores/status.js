@@ -1222,7 +1222,7 @@ export const useStatusStore = defineStore('statusStore', {
                             magnitude,
                             maxIntensity,
                             className: setClassName(maxIntensity, false),
-                            url: 'https://news.ceic.ac.cn/',
+                            url: 'https://www.ceic.ac.cn/',
                             intReportId: this.intReportIds.has(intReportId) ? intReportId : null
                         }
                         break

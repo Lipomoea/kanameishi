@@ -41,16 +41,13 @@ const Finder = new Function('compareFloat', 'calcLngDiff', withoutImports(read('
     '\nreturn FindHypocenter;')(compareFloat, calcLngDiff)
 const finder = Object.assign(Object.create(Finder.prototype), { parameters: profile.parameters })
 const stamp = 1788880000000
-const matchers = ['Nied', 'Palert'].map(name => {
-    const source = read(`src/components/components/${name}Net.vue`)
-    const eventSource = name === 'Nied' ? 'jmaEew' : 'cwaEew'
-    const functionName = name === 'Nied' ? 'isCloseToJmaEewHypocenter' : 'isCloseToCwaEewHypocenter'
-    const thresholds = source.match(/const hypoInfEewMatchThreshold = \{[^}]*\}/)[0]
-    const match = new Function('compareFloat', 'calcLngDiff', 'timeToStamp', thresholds + '\n' +
-        section(source, `const ${functionName} =`, 'const createInfLabelHtml =') + `\nreturn ${functionName};`
-    )(compareFloat, calcLngDiff, () => stamp)
-    return { match, eventSource }
-})
+const matchesAssociatedEewHypocenter = new Function('compareFloat', 'calcLngDiff', 'timeToStamp',
+    withoutImports(read('src/features/eew/EewNetworkRelations.js')) + '\nreturn matchesAssociatedEewHypocenter;'
+)(compareFloat, calcLngDiff, () => stamp)
+const matchers = [['niedNet', 'jmaEew'], ['palertNet', 'cwaEew']].map(([networkSource, eventSource]) => ({
+    eventSource,
+    match: (result, message) => matchesAssociatedEewHypocenter(networkSource, result, message)
+}))
 for(const axis of ['lat', 'lng']) {
     for(const delta of [-1e-9, 0, 1e-9]) {
         const first = { originStamp: stamp, hypocenter: { lat: 31.7, lng: 127.7, depth: 10 } }

@@ -5,10 +5,14 @@ Run from the repository root with Node.js 20 or later:
 ```sh
 node etc/utils/test/exact_round.mjs
 node etc/utils/test/float_boundaries.mjs
+node etc/utils/test/eew_network_relations.mjs
+node etc/utils/test/map_view_bounds.mjs
 node --experimental-vm-modules etc/hypocenter/test/compare_nied_profile.mjs
 node --experimental-vm-modules etc/hypocenter/test/palert_inference.mjs
 pnpm build
 ```
+
+`EewNetworkRelations.js` centralizes the CWA/P-Alert/TREM, JMA/NIED and KMA relationships. The association checks cover view bounds, hidden detection grids, independent network period statistics and inferred-hypocenter matching. Grid visibility remains separate from participation in view bounds; the always-on inference setting bypasses matching suppression but retains the quality threshold.
 
 `compareFloat` rounds both operands to ten decimal places by default. P-Alert PGA/activity thresholds, inferred-hypocenter coordinate matching and cluster merging use it at their explicit comparison boundaries. Grid offsets use `exactRound` with ten decimal places before `Math.round`; distance calculations clamp the haversine intermediate value to `[0, 1]`. The numeric checks cover both sides of each boundary, negative grid coordinates, scientific notation, invalid values and antipodal/near-antipodal distances. Weighted origin times and residual filtering retain their existing calculations.
 

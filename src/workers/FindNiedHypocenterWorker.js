@@ -1,5 +1,5 @@
 import { FindNiedHypocenter } from '@/classes/NiedHypoInf'
-import { mergeNiedHypocenterUpdates } from '@/utils/NiedHypocenterUpdates'
+import { mergeNiedHypocenterUpdates } from '@/features/stations/NiedHypocenterUpdates'
 
 let finder = null
 let pendingUpdate = null

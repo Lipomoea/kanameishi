@@ -4,13 +4,14 @@
 
 <script setup>
 import { reactive, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue';
-import { createPalertHypocenterUpdate, mergePalertHypocenterUpdates } from '@/utils/PalertHypocenterUpdates';
+import { createPalertHypocenterUpdate, mergePalertHypocenterUpdates } from '@/features/stations/PalertHypocenterUpdates';
 import Palert from '@/classes/Palert';
-import { StationFrameQueue } from '@/utils/StationFrameQueue';
+import { StationFrameQueue } from '@/features/stations/StationFrameQueue';
+import { isNetworkPeriodActive, shouldDisplayInferredHypocenter } from '@/features/eew/EewNetworkRelations';
 import { useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
 import { iconUrls } from '@/utils/Urls';
-import { calcDistanceKm, calcBearingDeg, calcLngDiff, calcWaveDistance, compareFloat, timeToStamp, focusWindow, getPalertLevelFromPgaPgv, getShindoFromLevel, playSound, sendMyNotification, stampToTime } from '@/utils/Utils';
+import { calcDistanceKm, calcBearingDeg, calcWaveDistance, compareFloat, focusWindow, getPalertLevelFromPgaPgv, getShindoFromLevel, playSound, sendMyNotification, stampToTime } from '@/utils/Utils';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { PalertStation, simpleIcon } from '@/classes/StationClasses';
@@ -33,8 +34,6 @@ let inferredHypocenterLayers = null
 let inferredHypocenterLabelLayers = []
 const infHypoIcon = L.icon({ iconUrl: infHypoIconUrl, iconSize: [40, 40], iconAnchor: [20, 20] })
 const inferredHypocenterLabelOffset = 24
-const minDisplayedHypocenterQualityScore = -3
-const hypoInfEewMatchThreshold = { lat: 1, lng: 1, depth: 100, originStamp: 10000 }
 const bearingDirections = ['N', 'E', 'S', 'W']
 const minHypocenterNeighborsPerDirection = 3
 const triggerCompatibilityConfig = {
@@ -359,29 +358,9 @@ const getFilterStageText = result => {
         : [result.filterStageLevel ?? 0]
     return inferenceLevels.join(' -> ')
 }
-const shouldDisplayHypocenterResult = result => {
-    if(result.qualityScore < minDisplayedHypocenterQualityScore) return false
-    if(settingsStore.mainSettings.displaySeisNet.palertHypoInfAlwaysOn) return true
-    return !isMatchedWithActiveCwaEew(result)
-}
-const isMatchedWithActiveCwaEew = result => {
-    if(!Array.isArray(activeEewList)) return false
-    return activeEewList.some(event => isCloseToCwaEewHypocenter(result, event?.eqMessage))
-}
-const isCloseToCwaEewHypocenter = (result, eqMessage) => {
-    if(eqMessage?.source !== 'cwaEew') return false
-    if(eqMessage.isAssumption || eqMessage.isCanceled) return false
-    if(!Number.isFinite(result?.originStamp)) return false
-    if(!Number.isFinite(eqMessage.lat) || !Number.isFinite(eqMessage.lng)) return false
-    if(!Number.isFinite(eqMessage.depth)) return false
-    const eewOriginStamp = timeToStamp(eqMessage.originTime, eqMessage.timeZone)
-    if(!Number.isFinite(eewOriginStamp) || eewOriginStamp <= 0) return false
-    const hypocenter = result.hypocenter
-    return compareFloat(Math.abs(hypocenter.lat - eqMessage.lat), hypoInfEewMatchThreshold.lat) <= 0 &&
-        compareFloat(calcLngDiff(hypocenter.lng, eqMessage.lng), hypoInfEewMatchThreshold.lng) <= 0 &&
-        Math.abs((hypocenter.depth ?? 10) - eqMessage.depth) <= hypoInfEewMatchThreshold.depth &&
-        Math.abs(result.originStamp - eewOriginStamp) <= hypoInfEewMatchThreshold.originStamp
-}
+const shouldDisplayHypocenterResult = result => shouldDisplayInferredHypocenter(
+    'palertNet', result, activeEewList, settingsStore.mainSettings.displaySeisNet.palertHypoInfAlwaysOn
+)
 const createInfLabelHtml = (result, labelInfo) => {
     const textInfoMode = settingsStore.effectivePalertHypoInfTextInfo
     if(textInfoMode === 0) return ''
@@ -670,7 +649,7 @@ watch(isHypocenterEnabled, enabled => {
     terminateHypocenterWorker()
     clearInferredHypocenters()
 })
-watch(() => statusStore.isActive.cwaEew || statusStore.isActive.palertNet, newVal => {
+watch(() => isNetworkPeriodActive('palertNet', statusStore.isActive), newVal => {
     if(newVal) {
         if(periodMaxLevel == -1) {
             periodMaxLevel = 0

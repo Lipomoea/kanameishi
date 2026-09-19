@@ -7,6 +7,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue';
 import { useStatusStore } from '@/stores/status';
+import { isNetworkPeriodActive } from '@/features/eew/EewNetworkRelations';
 import { useSettingsStore } from '@/stores/settings';
 import { FAN_API_APP_ID, iconUrls, seisNetUrls } from '@/utils/Urls';
 import { playSound, sendMyNotification, calcTimeDiff, focusWindow, getMmiFromKmaLevel, exactRound, calcDistanceKm } from '@/utils/Utils';
@@ -305,7 +306,7 @@ watch(()=>statusStore.map, newVal=>{
         )
     }
 }, { immediate: true })
-watch(()=>(statusStore.isActive.kmaEew || statusStore.isActive.kmaNet), newVal=>{
+watch(() => isNetworkPeriodActive('kmaNet', statusStore.isActive), newVal=>{
     if(newVal){
         if(periodMaxLevel == -1){
             periodMaxLevel = 0
