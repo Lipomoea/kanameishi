@@ -56,31 +56,8 @@ const createTyphoonSvgMarker = (currentInfo) => {
     });
     const latlng = [currentInfo.lat, currentInfo.lng];
     const marker = L.marker(latlng, { icon: svgIcon, pane: 'typhoonIconMarkerPane' });
-    let warnLevel;
-    switch (currentInfo.warnLevel) {
-        case 'white':
-            warnLevel = '台风白色预警';
-            break;
-        case 'blue':
-            warnLevel = '台风蓝色预警';
-            break;
-        case 'yellow':
-            warnLevel = '台风黄色预警';
-            break;
-        case 'orange':
-            warnLevel = '台风橙色预警';
-            break;
-        case 'red':
-            warnLevel = '台风红色预警';
-            break;
-        default:
-            warnLevel = '未知预警等级';
-            break;
-    }
     marker.bindTooltip(`
-        <strong>${warnLevel}</strong>
-        <br>
-        台风名称: ${name} (${nameEn})
+        <strong>${name} (${nameEn})</strong>
         <br>
         台风编号: ${id}
         <br>
@@ -229,8 +206,9 @@ const createTyphoonPointMarker = (info, isForecast = false) => {
 };
 
 const extractRadiusFromStr = radiusStr => {
+    if (typeof radiusStr !== 'string') return null;
     const radiusArr = radiusStr.split('|').map(str => Number(str));
-    if (radiusArr.length !== 4) return null;
+    if (radiusArr.length !== 4 || radiusArr.some(radius => !Number.isFinite(radius) || radius < 0)) return null;
     return {
         ne: radiusArr[0],
         se: radiusArr[1],
@@ -239,73 +217,77 @@ const extractRadiusFromStr = radiusStr => {
     };
 };
 
+const parseTyphoonPoint = point => {
+    if (!point || point.lat == null || point.lng == null || String(point.lat).trim() === '' || String(point.lng).trim() === '') return null;
+    const lat = Number(point.lat);
+    const lng = Number(point.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return {
+        time: point.time,
+        lat,
+        lng,
+        category: point.strong,
+        power: Number(point.power),
+        windSpeed: Number(point.speed),
+        pressure: Number(point.pressure),
+        moveSpeed: Number(point.movespeed),
+    };
+};
+
+const parseTyphoonInfo = info => {
+    if (!Array.isArray(info?.points) || info.points.length === 0) return null;
+    const pastPoints = info.points.map(parseTyphoonPoint);
+    if (pastPoints.some(point => !point)) return null;
+    const latestPoint = info.points[info.points.length - 1];
+    const currentInfo = {
+        ...pastPoints[pastPoints.length - 1],
+        id: String(info.tfid),
+        name: info.name,
+        nameEn: info.enname,
+        warnLevel: info.warnlevel,
+        landInfos: Array.isArray(info.land) ? info.land.map(landInfo => landInfo?.info).filter(Boolean) : [],
+        radius7: extractRadiusFromStr(latestPoint.radius7),
+        radius10: extractRadiusFromStr(latestPoint.radius10),
+        radius12: extractRadiusFromStr(latestPoint.radius12),
+    };
+    const forecast = latestPoint.forecast?.[0]?.forecastpoints;
+    const forecastPoints = Array.isArray(forecast) ? forecast.slice(1).map(parseTyphoonPoint).filter(Boolean) : [];
+    return { pastPoints, currentInfo, forecastPoints };
+};
+
 const fetchTyphoonData = async () => {
     try {
-        const typhoonArr = await Http.get(typhoonUrls.typhoon_http + `?time=${Date.now()}`);
-        // const typhoonArr = await Http.get(typhoonUrls.typhoon_http + `?tfid=202511`);
-        if (typhoonArr) {
-            typhoonData.length = 0;
-            if (Array.isArray(typhoonArr)) {
-                typhoonArr.forEach(info => {
-                    const { tfid: id, name, enname: nameEn, warnlevel: warnLevel } = info;
-                    const landInfos = info.land?.map(landInfo => landInfo?.info).filter(str => !!str);
-                    let pastPoints, currentInfo, forecastPoints;
-                    if (info.points) {
-                        const points = info.points;
-                        pastPoints = points.map(point => ({
-                            time: point.time,
-                            lat: Number(point.lat),
-                            lng: Number(point.lng),
-                            category: point.strong,
-                            power: Number(point.power),
-                            windSpeed: Number(point.speed),
-                            pressure: Number(point.pressure),
-                            moveSpeed: Number(point.movespeed),
-                        }));
-                        const latestPoint = points[points.length - 1];
-                        currentInfo = {
-                            id,
-                            name,
-                            nameEn,
-                            warnLevel,
-                            landInfos,
-                            time: latestPoint.time,
-                            lat: Number(latestPoint.lat),
-                            lng: Number(latestPoint.lng),
-                            category: latestPoint.strong,
-                            power: Number(latestPoint.power),
-                            windSpeed: Number(latestPoint.speed),
-                            pressure: Number(latestPoint.pressure),
-                            moveSpeed: Number(latestPoint.movespeed),
-                            radius7: extractRadiusFromStr(latestPoint.radius7),
-                            radius10: extractRadiusFromStr(latestPoint.radius10),
-                            radius12: extractRadiusFromStr(latestPoint.radius12),
-                        };
-                        forecastPoints = latestPoint.forecast?.[0].forecastpoints?.slice(1).map(point => ({
-                            time: point.time,
-                            lat: Number(point.lat),
-                            lng: Number(point.lng),
-                            category: point.strong,
-                            power: Number(point.power),
-                            windSpeed: Number(point.speed),
-                            pressure: Number(point.pressure),
-                        }));
-                    }
+        const activeList = await Http.get(typhoonUrls.typhoon_activity_http + `?time=${Date.now()}`);
+        if (stopped || !Array.isArray(activeList)) return false;
+        const ids = [...new Set(activeList.map(info => String(info?.tfid ?? '').trim()))];
+        if (ids.some(id => !id)) return false;
+        const previousData = new Map(typhoonData.map(info => [info.currentInfo.id, info]));
+        const results = await Promise.allSettled(ids.map(async id => {
+            const info = await Http.get(typhoonUrls.typhoon_info_http + `${encodeURIComponent(id)}?time=${Date.now()}`);
+            const typhoonInfo = String(info?.tfid) === id ? parseTyphoonInfo(info) : null;
+            if (!typhoonInfo) throw new Error(`Invalid typhoon detail: ${id}`);
+            return typhoonInfo;
+        }));
+        if (stopped) return false;
 
-                    const typhoonInfo = {
-                        pastPoints,
-                        currentInfo,
-                        forecastPoints,
-                    };
-                    typhoonData.push(typhoonInfo);
-                });
+        let isSuccess = true;
+        const nextData = [];
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                nextData.push(result.value);
+            } else {
+                isSuccess = false;
+                console.log(result.reason);
+                const previousInfo = previousData.get(ids[index]);
+                if (previousInfo) nextData.push(previousInfo);
             }
-            return true;
-        } else {
-            return false;
-        }
+        });
+        // Keep failed details only while their IDs remain in the active list.
+        typhoonData.splice(0, typhoonData.length, ...nextData);
+        return isSuccess;
     } catch (err) {
         console.log(err);
+        return false;
     }
 };
 
@@ -315,7 +297,7 @@ const loopFetch = async () => {
     clearTimeout(updateTimer);
     const isSuccess = await fetchTyphoonData();
     if (stopped) return;
-    const interval = isSuccess ? 10 * 60000 : 10000;
+    const interval = isSuccess ? 5 * 60000 : 30000;
     updateTimer = setTimeout(loopFetch, interval);
 };
 

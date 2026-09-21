@@ -124,5 +124,6 @@ export const utilUrls = {
   ],
 };
 export const typhoonUrls = {
-  typhoon_http: "https://api.fanstudio.tech/we/typhoon.php",
+  typhoon_activity_http: "https://typhoon.slt.zj.gov.cn/Api/TyhoonActivity",
+  typhoon_info_http: "https://typhoon.slt.zj.gov.cn/Api/TyphoonInfo/",
 };
