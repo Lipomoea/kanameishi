@@ -65,6 +65,7 @@ const palertUpdateTime = inject('palertUpdateTime')
 const palertPeriodMaxShindo = inject('palertPeriodMaxShindo')
 const palertPeriodBarClass = inject('palertPeriodBarClass')
 const handleTempEqlists = inject('handleTempEqlists')
+const smartSetView = inject('smartSetView')
 const activeEewList = inject('activeEewList')
 let periodMaxLevel = -1
 let pendingRender = false
@@ -332,6 +333,7 @@ const renderInferredHypocenters = results => {
     }
     layoutInferredHypocenterLabels()
     statusStore.isActive.palertInfHypo = visible.length > 0
+    smartSetView()
 }
 const createInferredWaveLayers = (latLng, result) => {
     const frameStamp = latestFrameStamp

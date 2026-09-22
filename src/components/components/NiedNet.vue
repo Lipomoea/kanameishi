@@ -397,6 +397,7 @@ const renderInferredHypocenters = results => {
             }
         })
     layoutInferredHypocenterLabels()
+    smartSetView()
 }
 const layoutInferredHypocenterLabels = () => {
     if(!inferredHypocenterMap) return
