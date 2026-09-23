@@ -118,7 +118,7 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { getFEName } from '@/utils/FERegions';
 import { Plus } from '@element-plus/icons-vue';
-import { calcCsisLevel, calcMaxJmaShindoLevel } from '@/utils/Utils';
+import { calcCsisLevel, calcMaxJmaShindoLevel, getShindoRank } from '@/utils/Utils';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
@@ -211,7 +211,7 @@ const generateEqMessage = (form, index, id) => {
         reportNumText,
         reportTime,
         isAssumption,
-        isWarn: form.maxIntensity == '自动' ? (useShindo.value ? maxIntensity >= '5' : maxIntensity >= 6.5) : isWarn,
+        isWarn: form.maxIntensity == '自动' ? (useShindo.value ? getShindoRank(maxIntensity) >= 5 : maxIntensity >= 6.5) : isWarn,
         isFinal,
         isCanceled,
         title: '模拟·' + (title.value || '地震预警'),

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import Http from '@/classes/Http';
 import WebSocketObj from '@/classes/WebSocket';
 import { eqUrls, FAN_API_APP_ID, iconUrls, tsunamiUrls } from '@/utils/Urls';
-import { setClassName, calcCsisLevel, stampToTime, getShindoFromInstShindo, shindoScaleKanji, calcTimeDiff, playSound, sendMyNotification, focusWindow, formatShindo, timeToStamp, systemTimeZone, convertTimeString, convertCompactTimeString } from '@/utils/Utils';
+import { setClassName, calcCsisLevel, stampToTime, getShindoFromInstShindo, shindoScaleKanji, getShindoRank, calcTimeDiff, playSound, sendMyNotification, focusWindow, formatShindo, timeToStamp, systemTimeZone, convertTimeString, convertCompactTimeString } from '@/utils/Utils';
 import { jmaSeisIntLoc } from '@/utils/JmaSeisIntLoc';
 import { useSettingsStore } from './settings';
 import { isTauri } from '@tauri-apps/api/core';
@@ -454,7 +454,7 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.magnitudeText = '規模: ' + data.Magunitude.toFixed(1)
                                 eqMessage.maxIntensity = data.MaxIntensity || '不明'
                                 eqMessage.maxIntensityText = '預估最大震度: ' + eqMessage.maxIntensity
-                                eqMessage.isWarn = eqMessage.maxIntensity >= '5' && eqMessage.maxIntensity != '不明'
+                                eqMessage.isWarn = getShindoRank(eqMessage.maxIntensity) >= 5
                                 break
                             case 1:
                                 if(data.id == eqMessage.id && oldType == 0) {
@@ -479,7 +479,7 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.magnitudeText = '規模: ' + eqMessage.magnitude.toFixed(1)
                                 eqMessage.maxIntensity = formatShindo(data.maxIntensity, false) || '不明'
                                 eqMessage.maxIntensityText = '預估最大震度: ' + eqMessage.maxIntensity
-                                eqMessage.isWarn = eqMessage.maxIntensity >= '5' && eqMessage.maxIntensity != '不明'
+                                eqMessage.isWarn = getShindoRank(eqMessage.maxIntensity) >= 5
                                 break
                         }
                         break

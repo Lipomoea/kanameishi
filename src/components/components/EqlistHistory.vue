@@ -45,7 +45,7 @@ import '@/assets/background.css';
 import { reactive, computed, inject, nextTick, onBeforeUnmount, watch } from 'vue';
 import { useSettingsStore } from '@/stores/settings';
 import { defaultEqMessage, useStatusStore } from '@/stores/status';
-import { openUrl, formatTimeZone, formatCsis, calcTimeDiff, formatShindo, calcPassedTime, stampToTime, exactRound } from '@/utils/Utils';
+import { openUrl, formatTimeZone, formatCsis, calcTimeDiff, formatShindo, getShindoRank, calcPassedTime, stampToTime, exactRound } from '@/utils/Utils';
 import { useTimeStore } from '@/stores/time';
 import { HistoryEvent } from '@/classes/EewEqlistClasses';
 import { isTauri } from '@tauri-apps/api/core';
@@ -198,7 +198,7 @@ const createMockEew = (item) => {
         reportNumText: '第1报（最终）',
         reportTime: originTime,
         isAssumption: false,
-        isWarn: item.useShindo ? item.maxIntensity >= '5' && item.maxIntensity != '不明' : Number(item.maxIntensity) >= 6.5,
+        isWarn: item.useShindo ? getShindoRank(item.maxIntensity) >= 5 : Number(item.maxIntensity) >= 6.5,
         isFinal: true,
         isCanceled: false,
         title: `模拟回放·${item.source}`,

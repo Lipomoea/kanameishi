@@ -387,7 +387,7 @@ import { getGridNetworkRelation, shouldDisplayNetworkGrid, shouldIncludeEewSWave
 import { extendLayerBounds, collectFilledAreaBounds, collectStrokedAreaBounds } from '@/features/map/MapViewBounds';
 import EqlistComponent from './EqlistComponent.vue';
 import SettingsComponent from './SettingsComponent.vue';
-import { verifyUpToDate, setClassName, getClassLevel, classNameArray, pointDistToCnArea, pointDistToKrArea, csisArray, shindoArray, calcCsisLevel, calcJmaShindoLevel, formatTimeZone, simplifyTopoJson, formatCsis, csisRomanArray, formatShindo, stampToTime, systemTimeZone } from '@/utils/Utils';
+import { verifyUpToDate, setClassName, getShindoRank, classNameArray, pointDistToCnArea, pointDistToKrArea, csisArray, shindoArray, calcCsisLevel, calcJmaShindoLevel, formatTimeZone, simplifyTopoJson, formatCsis, csisRomanArray, formatShindo, stampToTime, systemTimeZone } from '@/utils/Utils';
 import { topojsonUrls } from '@/utils/Urls';
 import { jmaSeisIntLoc } from '@/utils/JmaSeisIntLoc';
 import { isTauri } from '@tauri-apps/api/core';
@@ -1438,7 +1438,7 @@ const jmaWarnArea = computed(()=>{
         jmaEewList.forEach(event=>{
             const warnArea = JSON.parse(event.eqMessage.warnArea)
             warnArea.forEach(item=>{
-                if(!jmaWarnArea[item.name] || getClassLevel(item.className) > getClassLevel(jmaWarnArea[item.name].className)){
+                if(!jmaWarnArea[item.name] || getShindoRank(item.intensity) > getShindoRank(jmaWarnArea[item.name].intensity)){
                     jmaWarnArea[item.name] = item
                 }
             })
@@ -1447,12 +1447,11 @@ const jmaWarnArea = computed(()=>{
             for(let id in jmaSeisIntLoc) {
                 for(let eew of jpEewInfoList.value) {
                     const { magnitude, depth, lat, lng } = eew
-                    if(depth > 150) continue
                     const intensity = calcJmaShindoLevel(magnitude, depth, lat, lng, jmaSeisIntLoc[id], false)
-                    if(intensity < '1') continue
+                    if(getShindoRank(intensity) < 1) continue
                     const name = jmaSeisIntLoc[id].sect
                     const className = setClassName(intensity, true)
-                    if(!jmaWarnArea[name] || getClassLevel(className) > getClassLevel(jmaWarnArea[name].className)) {
+                    if(!jmaWarnArea[name] || getShindoRank(intensity) > getShindoRank(jmaWarnArea[name].intensity)) {
                         jmaWarnArea[name] = {
                             name,
                             intensity,
@@ -1477,9 +1476,9 @@ const jmaWarnArea = computed(()=>{
         if(settingsStore.mainSettings.eqlistsDisplayMode == 1 && !jmaEqlistEvent.isLatest && !jmaEqlistEvent.isActive) return {}
         const warnArea = JSON.parse(jmaEqlistEvent.eqMessage.warnArea)
         warnArea.forEach(point => {
-            const { name, className } = point
+            const { name, intensity } = point
             if(!name) return
-            if(!jmaWarnArea[name] || getClassLevel(className) > getClassLevel(jmaWarnArea[name].className)) {
+            if(!jmaWarnArea[name] || getShindoRank(intensity) > getShindoRank(jmaWarnArea[name].intensity)) {
                 jmaWarnArea[name] = point
             }
         })

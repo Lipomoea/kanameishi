@@ -1,4 +1,4 @@
-import { calcPassedTime, calcWaveDistance, calcReachTime, playSound, sendMyNotification, getClassLevel, focusWindow, calcCsisLevel, calcJmaShindoLevel, shindoScale, timeToStamp, formatTimeZone, calcDistanceKm } from '@/utils/Utils';
+import { calcPassedTime, calcWaveDistance, calcReachTime, playSound, sendMyNotification, getClassLevel, focusWindow, calcCsisLevel, calcJmaShindoLevel, getShindoRank, timeToStamp, formatTimeZone, calcDistanceKm } from '@/utils/Utils';
 import travelTimes from '@/utils/TravelTimes';
 import { chimeUrls, iconUrls } from '@/utils/Urls';
 import L from 'leaflet';
@@ -425,7 +425,7 @@ export class EewEvent {
                     ||
                     (
                         this.nearestJmaLoc
-                        ? (settingsStore.mainSettings.actionLocalShindo == 0 || shindoScale.indexOf(this.userShindo) >= settingsStore.mainSettings.actionLocalShindo)
+                        ? (settingsStore.mainSettings.actionLocalShindo == 0 || getShindoRank(this.userShindo) >= settingsStore.mainSettings.actionLocalShindo)
                         : (settingsStore.mainSettings.actionLocalCsis == 0 || Number(this.userCsis) >= settingsStore.mainSettings.actionLocalCsis)
                     )
                 )
@@ -434,7 +434,7 @@ export class EewEvent {
             ) this.shouldAction = true
             if(
                 this.nearestJmaLoc
-                ? (shindoScale.indexOf(this.userShindo) >= settingsStore.mainSettings.intenseLocalShindo)
+                ? (getShindoRank(this.userShindo) >= settingsStore.mainSettings.intenseLocalShindo)
                 : (Number(this.userCsis) >= settingsStore.mainSettings.intenseLocalCsis)
             ) this.isIntense = true
             if(this.shouldAction && !isAddition && !this.mute) this.handleActions(isFirst)

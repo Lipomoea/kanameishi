@@ -148,17 +148,16 @@ export const setClassName = (intensity, useShindo, isCanceled = false) => {
   let className = "dark-gray";
   if (!isCanceled) {
     if (useShindo) {
-      if (intensity >= "1" && intensity <= "7") {
-        if (intensity == "1") className = "gray";
-        if (intensity == "2") className = "blue";
-        if (intensity == "3") className = "green";
-        if (intensity == "4") className = "yellow";
-        if (intensity == "5-" || intensity == "5弱") className = "orange";
-        if (intensity == "5+" || intensity == "5強") className = "dark-orange";
-        if (intensity == "6-" || intensity == "6弱") className = "red";
-        if (intensity == "6+" || intensity == "6強") className = "dark-red";
-        if (intensity == "7") className = "purple";
-      }
+      const rank = getShindoRank(intensity);
+      if (rank == 1) className = "gray";
+      if (rank == 2) className = "blue";
+      if (rank == 3) className = "green";
+      if (rank == 4) className = "yellow";
+      if (rank == 5) className = "orange";
+      if (rank == 6) className = "dark-orange";
+      if (rank == 7) className = "red";
+      if (rank == 8) className = "dark-red";
+      if (rank == 9) className = "purple";
     } else {
       const numIntensity = Math.round(Number(intensity));
       if (numIntensity >= 1 && numIntensity <= 12) {
@@ -409,6 +408,7 @@ export const getPalertLevelFromPgaPgv = (pga, pgv) => {
   return usePgv ? level + 15 : level;
 };
 export const getShindoFromInstShindo = (instShindo, useSymbol = true) => {
+  if (!Number.isFinite(instShindo)) return useSymbol ? "?" : "不明";
   if (instShindo < -3.0) return "?";
   else if (instShindo < 0.5) return "0";
   else if (instShindo < 1.5) return "1";
@@ -540,6 +540,7 @@ export const calcJmaShindoLevel = (
   loc,
   useSymbol = true,
 ) => {
+  if (dep > 150) return useSymbol ? "?" : "不明";
   const instShindo = calcJmaShindo(mj, dep, hypoLat, hypoLng, loc);
   const instShindo1 = Math.floor(Math.round(instShindo * 100) / 10) / 10;
   if (instShindo1 < 0.5) return "0";
@@ -612,6 +613,12 @@ export const formatShindo = (intensity, useSymbol = true) =>
           .replace("級", "")
       : intensity.replace("+", "強").replace("-", "弱").replace("?", "不明")
     : undefined;
+export const getShindoRank = value => {
+  if (typeof value !== "string") return -1;
+  return shindoScale.indexOf(
+    formatShindo(value.trim().replaceAll("强", "強")),
+  );
+};
 export const calcMaxJmaShindoLevel = (
   mj,
   dep,
@@ -619,6 +626,7 @@ export const calcMaxJmaShindoLevel = (
   hypoLng,
   useSymbol = true,
 ) => {
+  if (dep > 150) return useSymbol ? "?" : "不明";
   const locList = Object.keys(jmaSeisIntLoc);
   const maxInt = locList.reduce(
     (maxInt, currLoc) =>
