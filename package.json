@@ -21,7 +21,7 @@
     "@tauri-apps/plugin-shell": "~2",
     "@tauri-apps/plugin-window-state": "~2",
     "@turf/turf": "^7.1.0",
-    "axios": "^1.13.5",
+    "axios": "^1.18.0",
     "dayjs": "^1.11.13",
     "element-plus": "^2.7.3",
     "geokdbush": "^2.0.1",
