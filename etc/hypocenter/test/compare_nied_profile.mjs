@@ -150,12 +150,14 @@ const adjacency = (stations, connected = () => true) => Object.fromEntries(stati
     }))]))
 // Compare all enumerable state apart from the new configuration references and opaque caches.
 const snapshot = finder => Object.fromEntries(Object.entries(finder)
-    .filter(([key, value]) => key !== 'profile' && key !== 'parameters' && !(value instanceof WeakMap)))
-// Keep the original density inputs to isolate solver equivalence. The intentional
-// 30 km density policy and initialized-table reuse are covered by palert_inference.mjs.
+    .filter(([key, value]) => key !== 'profile' && key !== 'parameters' && key !== 'stationDistanceTable' && !(value instanceof WeakMap)))
+// Keep the original density inputs and disable the breadth station bonus to isolate
+// solver equivalence. Both intentional policies are covered by palert_inference.mjs.
 const pair = adj => {
     const baseline = new Baseline([], adj)
-    return { baseline, current: new Current([], adj, structuredClone(baseline.stationDensityWeights)) }
+    const current = new Current([], adj, structuredClone(baseline.stationDensityWeights))
+    current.parameters = { ...current.parameters, penaltyBreadthKmPerStation: 0 }
+    return { baseline, current }
 }
 let frames = 0
 const update = (finders, picks, active = picks.map(activeSnapshot), inactive = []) => {
@@ -202,7 +204,7 @@ assert.equal(mergePair.current.clusters.length, 2)
 assert(update(mergePair, mergePicks).length > 0)
 assert.equal(mergePair.current.clusters.length, 1)
 
-// Exercise normal reference selection, weak-pick fallback and the hard inactive rejection.
+// Reference selection is unchanged; excess inactive evidence remains a finite, uncapped ratio.
 const penaltyStations = makeStations(6)
 const penaltyPicks = penaltyStations.map(station => oldFinder.createPickSnapshot(makePick(station)))
 const weakPicks = penaltyPicks.map(pick => ({ ...pick, maxAscend: 2, maxLevel: 4 }))
@@ -210,15 +212,18 @@ const quietStations = Array.from({ length: 8 }, (_, index) => ({ id: 100 + index
 const penaltyPair = pair({})
 for(const finder of Object.values(penaltyPair)) finder.setInactiveStations(quietStations)
 for(const picks of [penaltyPicks, weakPicks]) {
-    for(const name of ['getInactivePenaltyReferenceDistance', 'selectFallbackPenaltyReferencePick', 'calcInactiveStationPenalty']) {
-        const argsFor = () => name === 'calcInactiveStationPenalty' ? [hypocenter, structuredClone(picks), new Map()] : [structuredClone(picks), hypocenter, new Map()]
+    for(const name of ['getInactivePenaltyReferenceDistance', 'selectFallbackPenaltyReferencePick']) {
+        const argsFor = () => [structuredClone(picks), hypocenter, new Map()]
         equal(penaltyPair.current[name](...argsFor()), penaltyPair.baseline[name](...argsFor()), name)
     }
+    assert.equal(penaltyPair.baseline.calcInactiveStationPenalty(hypocenter, picks, new Map()).exceeded, true)
+    assert.equal(penaltyPair.current.calcInactiveStationPenalty(hypocenter, picks, new Map()), 8 / 6)
+    assert.equal(penaltyPair.baseline.evaluateHypocenter(picks, hypocenter).score, Infinity)
+    assert(Number.isFinite(penaltyPair.current.evaluateHypocenter(picks, hypocenter).score), 'Excess inactive stations no longer invalidate a candidate')
 }
-assert.equal(penaltyPair.current.calcInactiveStationPenalty(hypocenter, penaltyPicks, new Map()).exceeded, true)
 for(const finder of Object.values(penaltyPair)) finder.setInactiveStations(quietStations.slice(0, 2))
 equal(penaltyPair.current.calcInactiveStationPenalty(hypocenter, penaltyPicks, new Map()),
-    penaltyPair.baseline.calcInactiveStationPenalty(hypocenter, penaltyPicks, new Map()), 'Finite inactive penalty')
+    penaltyPair.baseline.calcInactiveStationPenalty(hypocenter, penaltyPicks, new Map()).penalty, 'Finite inactive penalty')
 for(const picks of [[], weakPicks.map(pick => ({ ...pick, latLng: [NaN, NaN] }))]) {
     compareMethod('getInactivePenaltyReferenceDistance', picks, hypocenter, new Map())
     compareMethod('selectFallbackPenaltyReferencePick', picks, hypocenter, new Map())
@@ -252,4 +257,4 @@ assert.equal(alternative.normalizeHypocenter({ lat: 35, lng: 139 }).depth, 25)
 assert.equal(alternative.getOptionCacheEntry(penaltyPicks[0], hypocenter, new Map()).travelTime, travelTimes.jb)
 assert.equal(alternative.update(mergePicks, [], mergePicks.map(activeSnapshot)).length, 0)
 assert.equal(newFinder.parameters.minInferenceStationCount, 5)
-console.log(`PASS ${frames} sequential frames and ${comparisons} exact comparisons with original density inputs; profile isolation verified`)
+console.log(`PASS ${frames} sequential frames and ${comparisons} exact comparisons with original density inputs and no breadth station bonus; profile isolation verified`)

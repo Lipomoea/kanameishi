@@ -4,6 +4,7 @@ import { mergePalertHypocenterUpdates } from '@/features/stations/PalertHypocent
 let finder = null
 let adjStations = {}
 let stationDensityWeights = {}
+let stationDistanceTable = null
 let pendingUpdate = null
 let scheduled = false
 let generation = 0
@@ -17,6 +18,7 @@ self.onmessage = ({ data: message }) => {
         if(message.type === 'init') {
             adjStations = message.adjStations || {}
             stationDensityWeights = FindPalertHypocenter.calcStationDensityWeights(adjStations)
+            stationDistanceTable = message.stationDistanceTable ?? null
         }
         else self.postMessage({ requestId: message.requestId, results: [] })
         return
@@ -32,7 +34,7 @@ self.onmessage = ({ data: message }) => {
         const update = pendingUpdate
         pendingUpdate = null
         if(!update) return
-        finder ??= new FindPalertHypocenter(update.inactiveStations, adjStations, stationDensityWeights)
+        finder ??= new FindPalertHypocenter(update.inactiveStations, adjStations, stationDensityWeights, stationDistanceTable)
         const results = finder.update(update.pickCandidates, update.inactiveStations, update.activeStations)
         self.postMessage({ requestId: update.requestId, results })
     }, 0)

@@ -7,6 +7,7 @@ let processingScheduled = false
 let workerVersion = 0
 let adjStations = {}
 let stationDensityWeights = {}
+let stationDistanceTable = null
 
 self.onmessage = event => {
     const message = event.data || {}
@@ -20,6 +21,7 @@ self.onmessage = event => {
         if(type === 'init') {
             adjStations = message.adjStations || {}
             stationDensityWeights = FindNiedHypocenter.calcStationDensityWeights(adjStations)
+            stationDistanceTable = message.stationDistanceTable ?? null
         }
         else self.postMessage({ requestId, results: [] })
         return
@@ -53,7 +55,7 @@ const processPendingUpdate = scheduledVersion => {
     } = message
 
     if(!finder) {
-        finder = new FindNiedHypocenter(inactiveStations, adjStations, stationDensityWeights)
+        finder = new FindNiedHypocenter(inactiveStations, adjStations, stationDensityWeights, stationDistanceTable)
     }
 
     const results = finder.update(pickCandidates, inactiveStations, activeStations)

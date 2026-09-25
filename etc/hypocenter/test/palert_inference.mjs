@@ -1178,6 +1178,107 @@ const snapshotUpdate = { activeStations: [], pickCandidates: [], inactiveStation
 assert.deepEqual(mergePalertHypocenterUpdates(snapshotUpdate, { ...snapshotUpdate, inactiveStations: [] }).inactiveStations, [])
 assert.deepEqual(mergePalertHypocenterUpdates(snapshotUpdate, { ...snapshotUpdate, inactiveStations: refreshedSnapshots }).inactiveStations, refreshedSnapshots)
 
+// Breadth depends on distinct station positions, independently of candidate hypocenters.
+for(const Finder of [FindNiedHypocenter, FindPalertHypocenter]) {
+    const breadthFinder = new Finder([], {})
+    const stationId = i => Finder === FindNiedHypocenter ? i : `breadth-${i}`
+    const breadthPick = (i, distanceKm) => ({
+        stationId: stationId(i), latLng: [0, distanceKm / 6371.0088 * 180 / Math.PI]
+    })
+    assert.equal(breadthFinder.parameters.penaltyBreadthKmPerStation, 10)
+    for(const [breadthKm, weightFraction] of [[0, 0.96], [5, 0.95], [50, 0.86], [100, 0.76],
+        [200, 0.56], [400, 0.16], [479.9, 0.0002], [480, 0], [480.1, 0], [600, 0]]) {
+        const context = breadthFinder.createInactivePenaltyContext([breadthPick(0, 0), breadthPick(1, breadthKm)])
+        const expected = breadthFinder.parameters.penaltyFullWeight * weightFraction
+        assert(Math.abs(context.inactivePenaltyWeight - expected) < 1e-12, `${Finder.name}: ${breadthKm} km station bonus`)
+        assert.equal(context.stationCount, 2, 'Breadth changes only the weight, not the actual station count')
+    }
+    const spatialPicks = [breadthPick(0, 0), breadthPick(1, 60), breadthPick(2, 120)]
+    const spatialContext = breadthFinder.createInactivePenaltyContext(spatialPicks)
+    // Pair distances are 60, 120, 60 km: mean 80 km adds 8 stations to the actual 3.
+    assert(Math.abs(spatialContext.inactivePenaltyWeight - breadthFinder.parameters.penaltyFullWeight * 0.78) < 1e-12)
+    const roster = [spatialPicks[2], spatialPicks[0], spatialPicks[1], breadthPick(3, 0)]
+    const distanceTable = structuredClone({
+        indexes: Object.fromEntries(roster.map((pick, index) => [pick.stationId, index])),
+        rows: roster.map(a => Float64Array.from(roster, b => calcDistanceKm(a.latLng, b.latLng)))
+    })
+    const tableFinder = new Finder([], {}, null, distanceTable)
+    const tableOnlyPicks = spatialPicks.map(pick => ({ stationId: pick.stationId,
+        get latLng() { throw new Error('Breadth must use the supplied distance table without reading coordinates') }
+    }))
+    for(let round = 0; round < 3; round++) {
+        const context = tableFinder.createInactivePenaltyContext([...tableOnlyPicks, tableOnlyPicks[0]])
+        assert.equal(context.stationCount, 3)
+        assert.equal(context.inactivePenaltyWeight, spatialContext.inactivePenaltyWeight,
+            'Numeric/string station IDs and shuffled roster indexes must preserve direct-distance breadth')
+    }
+    assert.equal(tableFinder.createInactivePenaltyContext([{ stationId: stationId(0) }, { stationId: stationId(3) }]).inactivePenaltyWeight,
+        breadthFinder.calcInactivePenaltyWeight(2), 'A cached zero distance must not fall back to coordinates')
+    const repeatedContext = breadthFinder.createInactivePenaltyContext([
+        ...spatialPicks, { ...spatialPicks[0], pickId: 'later-pick', triggerStamp: stamp + 1000 }
+    ])
+    assert.equal(repeatedContext.stationCount, 3)
+    assert.equal(repeatedContext.inactivePenaltyWeight, spatialContext.inactivePenaltyWeight, 'Repeated picks do not change breadth or count')
+    const collocatedContext = breadthFinder.createInactivePenaltyContext([breadthPick(0, 0), breadthPick(1, 0)])
+    assert.equal(collocatedContext.stationCount, 2, 'Distinct stations at identical coordinates remain distinct')
+    assert.equal(collocatedContext.inactivePenaltyWeight, breadthFinder.calcInactivePenaltyWeight(2))
+    for(const picks of [[], [breadthPick(0, 0)]]) {
+        assert.equal(breadthFinder.createInactivePenaltyContext(picks).inactivePenaltyWeight,
+            breadthFinder.calcInactivePenaltyWeight(picks.length), 'Fewer than two stations receive no breadth station bonus')
+    }
+    const invalidContext = breadthFinder.createInactivePenaltyContext([breadthPick(0, 0), { stationId: stationId(1) }])
+    assert.equal(invalidContext.inactivePenaltyWeight, breadthFinder.calcInactivePenaltyWeight(2), 'Unavailable breadth preserves the count-based weight')
+    const fiftyStations = Array.from({ length: 50 }, (_, i) => breadthPick(i, i * 10))
+    assert.equal(breadthFinder.createInactivePenaltyContext(fiftyStations).inactivePenaltyWeight, 0, 'The original 50-station zero-weight threshold remains')
+}
+console.log('PASS NIED/P-Alert 10 km station bonus, distance-table lookup without coordinate access, fractional counts, early zero weight and station deduplication')
+
+// Excess quiet stations remain a finite penalty for shallow and deep candidates in both networks.
+for(const Finder of [FindNiedHypocenter, FindPalertHypocenter]) {
+    const uncappedFinder = new Finder([], {})
+    const stationId = i => Finder === FindNiedHypocenter ? i : `uncapped-${i}`
+    const center = { lat: 35, lng: 139, depth: 500 }
+    const picks = Array.from({ length: 6 }, (_, i) => {
+        const latLng = [35 + Math.cos(i * Math.PI / 3) * 0.5, 139 + Math.sin(i * Math.PI / 3) * 0.5]
+        const distance = calcDistanceKm([35, 139], latLng)
+        const triggerStamp = stamp + calcReachTime(tables.jma2001, true, center.depth, distance) * 1000
+        return { stationId: stationId(i), pickId: `${stationId(i)}:${triggerStamp}`, latLng,
+            triggerStamp, maxAscend: 5, maxLevel: 12, secondMaxLevel: 10, densityWeight: 1 }
+    }).sort((a, b) => a.triggerStamp - b.triggerStamp)
+    const quietStation = (i, latLng) => ({ id: stationId(100 + i), latLng,
+        updateStamp: stamp + 120000, nonQuietBoundaryStamp: stamp - 1000 })
+    for(const [count, expectedPenalty] of [[0, 0], [3, 0.5], [6, 1], [7, 7 / 6], [18, 3]]) {
+        const nearStations = Array.from({ length: count }, (_, i) => quietStation(i, [35, 139]))
+        // Count every eligible station without including stations outside the reference radius.
+        for(const farCount of [0, 12]) {
+            uncappedFinder.setInactiveStations([...nearStations,
+                ...Array.from({ length: farCount }, (_, i) => quietStation(50 + i, [40, 145]))])
+            for(const depth of [10, 500]) {
+                const result = uncappedFinder.evaluateHypocenter(picks, { ...center, depth })
+                assert(Number.isFinite(result.score), `${Finder.name}: ${count} inactive stations at depth ${depth} stay valid`)
+                assert.equal(result.inactivePenalty, expectedPenalty)
+                assert.equal(result.inactivePenaltyWeight, uncappedFinder.createInactivePenaltyContext(picks).inactivePenaltyWeight)
+                assert.equal(result.score, result.rmse + expectedPenalty * result.inactivePenaltyWeight +
+                    result.waveCountPenalty + result.unexplainedPickPenalty)
+            }
+            const repeatedPicks = [...picks, { ...picks[0], pickId: 'repeat', triggerStamp: picks[0].triggerStamp + 1000 }]
+            assert.equal(uncappedFinder.calcInactiveStationPenalty(center, repeatedPicks, new Map()), expectedPenalty,
+                'Repeated picks do not increase the inactive-penalty denominator')
+        }
+    }
+    assert.equal(uncappedFinder.calcInactiveStationPenalty(center, [], new Map()), 0)
+    const widePicks = picks.map(pick => ({ ...pick,
+        latLng: [35 + (pick.latLng[0] - 35) * 8, 139 + (pick.latLng[1] - 139) * 8] }))
+    const wideResult = uncappedFinder.evaluateHypocenter(widePicks, center)
+    assert(Number.isFinite(wideResult.score))
+    assert.equal(wideResult.inactivePenalty, 3, 'The inactive ratio still uses the six actual stations')
+    assert.equal(wideResult.inactivePenaltyWeight, 0, 'Sufficient breadth eliminates the penalty before fifty actual stations')
+    assert.equal(wideResult.score, wideResult.rmse + wideResult.waveCountPenalty + wideResult.unexplainedPickPenalty)
+    const fiftyPicks = Array.from({ length: 50 }, (_, i) => ({ ...picks[i % picks.length], stationId: stationId(i) }))
+    assert.equal(uncappedFinder.calcInactiveStationPenalty(center, fiftyPicks, new Map()), 0)
+}
+console.log('PASS NIED/P-Alert uncapped inactive ratios and finite shallow/deep candidate scores')
+
 // Exercise the actual scenario search and duplicate-pick refit with one shared cluster context.
 const contextCenter = { lat: 24, lng: 121, depth: 10 }
 const contextPicks = Array.from({ length: 6 }, (_, i) => {
@@ -1197,18 +1298,31 @@ const contextFinder = new FindPalertHypocenter([
     { id: 'quiet-between', latLng: [26, 121], updateStamp: stamp + 30000, nonQuietBoundaryStamp: earliestContextPick.triggerStamp + 1 }
 ], {})
 const originalScenarioResult = contextFinder.createScenarioLikelihoodResult
+const originalPenaltyWeight = contextFinder.calcInactivePenaltyWeight
+let penaltyWeightCalculations = 0
+contextFinder.calcInactivePenaltyWeight = function(...args) {
+    penaltyWeightCalculations++
+    return originalPenaltyWeight.apply(this, args)
+}
 const contexts = new Set(), contextCandidates = new Set(), scenarios = new Set()
 contextFinder.createScenarioLikelihoodResult = function(...args) {
     const context = args[8]
     contexts.add(context)
     contextCandidates.add(this.getInactivePenaltyCandidates(context.picks))
     scenarios.add(args[4])
-    return originalScenarioResult.apply(this, args)
+    const result = originalScenarioResult.apply(this, args)
+    if(Number.isFinite(result.score)) {
+        assert.equal(result.inactivePenaltyWeight, context.inactivePenaltyWeight, 'Every candidate uses the precomputed weight')
+    }
+    return result
 }
 const contextResult = contextFinder.findBestHypocenterWithEffectivePicks(contextPicks, contextCenter, null)
 assert.equal(contextResult.inferenceFilterStageLevels.length, 2, 'The scenario must exercise both classification and duplicate refit')
 assert(contextResult.pickResults.some(item => item.excludedReason === 'duplicate-phase'))
 assert.equal(contexts.size, 1)
+assert.equal(penaltyWeightCalculations, 1, 'Classification, all candidates and duplicate refit share one weight calculation')
+assert.equal(contextResult.inactivePenaltyWeight, [...contexts][0].inactivePenaltyWeight)
+assert(contextResult.inactivePenaltyWeight < originalPenaltyWeight.call(contextFinder, 6), 'The real search applies the breadth station bonus')
 assert.strictEqual([...contexts][0].picks, contextPicks)
 assert.equal(contextCandidates.size, 1)
 assert.deepEqual([...contextCandidates][0].map(station => station.id), ['quiet-before'])
@@ -1233,7 +1347,7 @@ assert.equal(refs.selectFallbackPenaltyReferencePick(noSeconds, {}, new Map()), 
 const noMetrics = [{}, {}]
 assert.equal(refs.selectFallbackPenaltyReferencePick(noMetrics, {}, new Map()), noMetrics[0])
 assert.equal(refs.getInactivePenaltyReferenceDistance(noDistances, {}, new Map()), null)
-assert.equal(refs.calcInactiveStationPenalty({}, noDistances, new Map()).penalty, 0)
+assert.equal(refs.calcInactiveStationPenalty({}, noDistances, new Map()), 0)
 assert.equal(refs.selectFallbackPenaltyReferencePick([weak[0], { ...weak[0], maxLevel: 20 }], {}, new Map()), weak[0])
 const effective = (maxLevel, residual, pickId) => ({ item: { pick: { maxLevel, pickId } }, residual })
 assert(finder.isPreferredEffectivePick(effective(12, 100, 'b'), effective(10, 0, 'a')))
@@ -1270,12 +1384,14 @@ globalThis.__palertClientDeps = {
 const clientSource = `import { mergePalertHypocenterUpdates } from '@/features/stations/PalertHypocenterUpdates';
 const { Worker, renderInferredHypocenters, clearInferredHypocenters, isHypocenterEnabled } = globalThis.__palertClientDeps;
 let hypocenterWorker = null, hypocenterRequestId = 0, inFlightHypocenterRequestId = null, pendingHypocenterUpdate = null;
-const adjStations4Hypo = {};
+const adjStations4Hypo = {}, stationDistanceTable = { indexes: {}, rows: [] };
 ${section(componentSource, 'const getHypocenterWorker =', 'const clearInferredHypocenters =')}
 export { updateInferredHypocentersInWorker as update, resetHypocenterWorker as reset, terminateHypocenterWorker as terminate };`
 const client = await load('src/components/components/test-palert-client.js', clientSource.replace('import.meta.url', JSON.stringify(new URL('../../../src/components/components/PalertNet.vue', import.meta.url).href)))
 client.update(updateFor(pick)); client.update(merged)
 assert.equal(workers[0].messages.length, 2)
+assert.deepEqual(workers[0].messages[0].stationDistanceTable, { indexes: {}, rows: [] })
+assert(!('stationDistanceTable' in workers[0].messages[1]), 'The distance table is sent only on initialization')
 workers[0].onmessage({ data: { requestId: workers[0].messages[1].requestId, results: ['first'] } })
 assert.equal(workers[0].messages[2].pickCandidates[0].secondMaxLevel, 10)
 const oldRequest = workers[0].messages[2].requestId
@@ -1318,13 +1434,15 @@ globalThis.__niedClientDeps = {
 const niedClientSource = `import { mergeNiedHypocenterUpdates } from '@/features/stations/NiedHypocenterUpdates';
 const { Worker, renderInferredHypocenters, clearInferredHypocenters, console } = globalThis.__niedClientDeps;
 let hypocenterWorker = null, hypocenterRequestId = 0, inFlightHypocenterRequestId = null, pendingHypocenterUpdate = null;
-const adjStations4Hypo = {}, isNiedHypoInfEnabled = () => true;
+const adjStations4Hypo = {}, stationDistanceTable = { indexes: {}, rows: [] }, isNiedHypoInfEnabled = () => true;
 ${section(niedComponentSource, 'const getHypocenterWorker =', 'const getPickDisplayWave =')}
 export { updateInferredHypocentersInWorker as update, resetHypocenterWorker as reset, terminateHypocenterWorker as terminate };`
 const niedClient = await load('src/components/components/test-nied-client.js', niedClientSource.replace('import.meta.url', JSON.stringify(new URL('../../../src/components/components/NiedNet.vue', import.meta.url).href)))
 const niedStation = { id: 0, latLng: [35, 139], triggerStamp: stamp, updateStamp: stamp, ascend: 3, level: 8, isActive: true }
 const sendNiedUpdate = station => niedClient.update([station], [station], new Set())
 sendNiedUpdate(niedStation)
+assert.deepEqual(niedWorkers[0].messages[0].stationDistanceTable, { indexes: {}, rows: [] })
+assert(!('stationDistanceTable' in niedWorkers[0].messages[1]), 'NIED sends the distance table only on initialization')
 sendNiedUpdate({ ...niedStation, ascend: 4, updateStamp: stamp + 1000 })
 assert.equal(niedWorkers[0].messages.length, 2, 'An in-flight NIED request retains subsequent updates')
 niedWorkers[0].onmessage({ data: { requestId: niedWorkers[0].messages[1].requestId, results: ['first'] } })
@@ -1538,6 +1656,13 @@ ${section(componentSource, 'const calcBearingDirection =', 'const clearTimelineS
 export { buildAdjStations };`
 const { buildAdjStations } = await load('src/components/components/test-palert-adjacency.js', adjacencySource)
 const directional = buildAdjStations()
+const palertDistanceTable = structuredClone(directional.stationDistanceTable)
+for(const [id, station] of Object.entries(globalThis.__palertAdjStations)) {
+    for(const [otherId, otherStation] of Object.entries(globalThis.__palertAdjStations)) {
+        assert.equal(palertDistanceTable.rows[palertDistanceTable.indexes[id]][palertDistanceTable.indexes[otherId]],
+            calcDistanceKm(station.latLng, otherStation.latLng), 'Retain all distances, including pairs outside adjacency')
+    }
+}
 const localStationIds = ['center', 'northLocal', 'northSecond', 'south', 'southSecond', 'southThird', 'southFourth']
 assert.deepEqual(directional.detectionAdjStations.center.toSorted(), localStationIds.toSorted())
 assert.equal(directional.triggerDiffTolerances.center.center, 2000)
@@ -1606,11 +1731,13 @@ console.log('PASS four-station activation minimum, nearest-first supplements, in
 // Run NIED's actual initialization code with sparse and dense directions.
 const buildNiedAdjacency = new Function('stationList', 'calcDistanceKm', 'calcBearingDeg', `
     const adjStationIds = {}, adjStations4Hypo = {}, expireSeconds = {}, triggerDiffToleranceMatrix = [];
+    let stationDistanceTable = null;
+    ${section(niedComponentSource, 'const triggerCompatibilityConfig =', 'const triggerDiffToleranceMatrix =')}
     ${section(niedComponentSource, 'const bearingDirections =', 'let decimal =')}
     ${section(niedComponentSource, 'const calcBearingDirection =', 'let pendingRender =')}
     ${niedComponentSource.match(/const nearbyLength = \d+/)[0]};
-    ${section(niedComponentSource, 'let latLngs = []', 'distanceMatrix.forEach(distanceRow => {')}
-    return { detection: adjStationIds, inference: adjStations4Hypo };
+    ${section(niedComponentSource, 'let latLngs = []', 'stationList.forEach((latLng, index)=>')}
+    return { detection: adjStationIds, inference: adjStations4Hypo, stationDistanceTable, triggerDiffToleranceMatrix };
 `)
 const niedNeighborCoords = [
     [0, 0], [0.1, 0], [0.5, 0], [0.6, 0], // self, local north, second north, extra north
@@ -1619,6 +1746,17 @@ const niedNeighborCoords = [
     [0, -2.6], [0, -2.8] // west has only one station inside 300 km
 ]
 const niedDirectional = buildNiedAdjacency(niedNeighborCoords, calcDistanceKm, calcBearingDeg)
+const niedDistanceTable = structuredClone(niedDirectional.stationDistanceTable)
+for(let i = 0; i < niedNeighborCoords.length; i++) {
+    for(let j = 0; j < niedNeighborCoords.length; j++) {
+        const distance = calcDistanceKm(niedNeighborCoords[i], niedNeighborCoords[j])
+        assert(Math.abs(niedDistanceTable.rows[i][j] - distance) < 1e-10, 'NIED retains distances in km')
+        assert.equal(niedDistanceTable.indexes[i], i)
+        assert.equal(niedDirectional.triggerDiffToleranceMatrix[i][j], niedDistanceTable.rows[i][j] / 3.5 * 1000 + 2000)
+    }
+    assert.notEqual(niedDirectional.triggerDiffToleranceMatrix[i], niedDirectional.stationDistanceTable.rows[i],
+        'Time tolerances must not overwrite the distance table')
+}
 assert.deepEqual(niedDirectional.detection[0], [0, 1, 7, 8, 9], 'NIED activation uses only its original local neighbors')
 assert.deepEqual(niedDirectional.inference[0].map(s => s.stationId).sort((a,b) => a-b), [0, 1, 2, 4, 5, 7, 8, 9, 11],
     'Self does not count toward north; fill two nearest per direction and preserve all local neighbors')
@@ -1718,6 +1856,7 @@ for(const name of ['Palert', 'Nied']) {
     const { L, settingsStore, statusStore, isHypocenterEnabled } = globalThis.__hypocenterRendererDeps;
     const activeEewList = [], infHypoIcon = {}, latestFrameStamp = ${stamp + 20000}, updateStamp = latestFrameStamp;
     const isNiedHypoInfEnabled = () => isHypocenterEnabled.value;
+    const smartSetView = () => {};
     let inferredHypocenterMap = null, inferredHypocenterLayers = null, inferredHypocenterLabelLayers = [];
     ${source.split('\n').find(line => line.startsWith('const inferredHypocenterLabelOffset ='))}
     ${isPalert ? section(source, 'const clearInferredHypocenters =', 'const fetchRealtimeData =') :
@@ -1786,7 +1925,11 @@ const adjacency = Object.fromEntries(stations.map(station => [station.id, statio
 })).filter(neighbor => neighbor.distance <= 30)]))
 const arrivals = new Map(stations.map(station => [station.id, Math.round((origin +
     calcReachTime(tables.jma2001, true, center.depth, calcDistanceKm([center.lat, center.lng], station.latLng)) * 1000) / 1000) * 1000]))
-const replayFinder = new FindPalertHypocenter([], adjacency)
+const replayDistanceTable = {
+    indexes: Object.fromEntries(stations.map((station, index) => [station.id, index])),
+    rows: stations.map(a => Float64Array.from(stations, b => calcDistanceKm(a.latLng, b.latLng)))
+}
+const replayFinder = new FindPalertHypocenter([], adjacency, null, replayDistanceTable)
 let bestResult = null
 let frameAtFullNetwork = null
 for(let frame = 0; frame < 125; frame++) {
@@ -1826,9 +1969,9 @@ const posted = []
 globalThis.__palertTestWorker = { postMessage: message => posted.push(message) }
 const palertWorkerState = await load('src/workers/test-palert-worker.js', `const self = globalThis.__palertTestWorker;
 ${read('src/workers/FindPalertHypocenterWorker.js')}
-export { stationDensityWeights, finder };`)
+export { stationDensityWeights, stationDistanceTable, finder };`)
 const handler = globalThis.__palertTestWorker.onmessage
-handler({ data: { type: 'init', adjStations: adjacency } })
+handler({ data: { type: 'init', adjStations: adjacency, stationDistanceTable: replayDistanceTable } })
 const initializedPalertDensity = palertWorkerState.stationDensityWeights
 assert.deepEqual(initializedPalertDensity, FindPalertHypocenter.calcStationDensityWeights(adjacency))
 handler({ data: { ...frameAtFullNetwork, type: 'update', requestId: 1 } })
@@ -1839,20 +1982,24 @@ handler({ data: { ...frameAtFullNetwork, type: 'update', requestId: 3 } })
 await new Promise(resolve => setTimeout(resolve, 10))
 assert(posted.find(message => message.requestId === 3)?.results.length > 0)
 assert.equal(palertWorkerState.finder.stationDensityWeights, initializedPalertDensity)
+assert.equal(palertWorkerState.finder.stationDistanceTable, replayDistanceTable)
 handler({ data: { type: 'reset', requestId: 4 } })
 handler({ data: { ...frameAtFullNetwork, type: 'update', requestId: 5 } })
 await new Promise(resolve => setTimeout(resolve, 10))
 assert.equal(palertWorkerState.finder.stationDensityWeights, initializedPalertDensity,
     'P-Alert preserves its initialized density table when resetting and recreating a finder')
+assert.equal(palertWorkerState.finder.stationDistanceTable, replayDistanceTable,
+    'P-Alert reuses the initialized distance table across finder resets')
 handler({ data: { type: 'init', adjStations: {} } })
 assert.notEqual(palertWorkerState.stationDensityWeights, initializedPalertDensity)
 assert.deepEqual(palertWorkerState.stationDensityWeights, {}, 'A new station initialization replaces the density table')
+assert.equal(palertWorkerState.stationDistanceTable, null, 'Reinitialization must discard the old roster distance table')
 delete globalThis.__palertTestWorker
 console.log('PASS real Worker inference, scheduled-reset cancellation and density-table reuse/reinitialization')
 
 // Control the NIED Worker task queue to exercise reinitialization between scheduled updates.
 const niedWorkerCallbacks = [], niedWorkerPosted = [], niedFinderAdjacencies = [], niedFinderCalls = []
-const niedDensityTables = [], niedFinderDensityTables = []
+const niedDensityTables = [], niedFinderDensityTables = [], niedFinderDistanceTables = []
 globalThis.__niedWorkerDeps = {
     self: { postMessage: message => niedWorkerPosted.push(message) },
     setTimeout: callback => niedWorkerCallbacks.push(callback),
@@ -1862,9 +2009,10 @@ globalThis.__niedWorkerDeps = {
             niedDensityTables.push(weights)
             return weights
         }
-        constructor(inactiveStations, adjStations, stationDensityWeights) {
+        constructor(inactiveStations, adjStations, stationDensityWeights, stationDistanceTable) {
             niedFinderAdjacencies.push(adjStations)
             niedFinderDensityTables.push(stationDensityWeights)
+            niedFinderDistanceTables.push(stationDistanceTable)
             this.serial = niedFinderAdjacencies.length
         }
         update(...args) { niedFinderCalls.push(args); return [{ serial: this.serial }] }
@@ -1880,7 +2028,7 @@ const niedWorkerUpdate = requestId => ({ data: {
 niedHandler({ data: { type: 'init', adjStations: { old: [] } } })
 niedHandler(niedWorkerUpdate(1))
 const newNiedAdjacency = { 0: [{ stationId: 0, distance: 0 }] }
-niedHandler({ data: { type: 'init', adjStations: newNiedAdjacency } })
+niedHandler({ data: { type: 'init', adjStations: newNiedAdjacency, stationDistanceTable: niedDistanceTable } })
 niedHandler(niedWorkerUpdate(2))
 niedWorkerCallbacks.shift()()
 niedHandler(niedWorkerUpdate(3))
@@ -1891,6 +2039,7 @@ assert.equal(niedFinderAdjacencies[0], newNiedAdjacency)
 assert.equal(niedDensityTables.length, 2, 'NIED calculates density once per initialization')
 assert.deepEqual(niedDensityTables[1], { 0: 1 })
 assert.equal(niedFinderDensityTables[0], niedDensityTables[1])
+assert.equal(niedFinderDistanceTables[0], niedDistanceTable)
 assert.equal(niedFinderCalls[0][0][0].ascend, 3)
 niedHandler(niedWorkerUpdate(4))
 niedHandler({ data: { type: 'reset', requestId: 5 } })
@@ -1903,6 +2052,7 @@ assert.equal(niedWorkerPosted.at(-1).results[0].serial, 2, 'Reset creates a fres
 assert.equal(niedFinderAdjacencies[1], newNiedAdjacency, 'Reset preserves the initialized adjacency')
 assert.equal(niedDensityTables.length, 2, 'Reset and frame updates do not recalculate NIED density')
 assert.equal(niedFinderDensityTables[1], niedDensityTables[1], 'Reset preserves the initialized density table')
+assert.equal(niedFinderDistanceTables[1], niedDistanceTable, 'Reset preserves the initialized distance table')
 niedHandler({ data: { type: 'init', adjStations: {} } })
 niedHandler(niedWorkerUpdate(7))
 niedWorkerCallbacks.shift()()
@@ -1911,6 +2061,7 @@ assert.deepEqual(niedFinderAdjacencies[2], {})
 assert.equal(niedDensityTables.length, 3)
 assert.equal(niedFinderDensityTables[2], niedDensityTables[2])
 assert.deepEqual(niedFinderDensityTables[2], {})
+assert.equal(niedFinderDistanceTables[2], null, 'Reinitialization must discard old NIED station distances')
 delete globalThis.__niedWorkerDeps
 console.log('PASS NIED Worker reinitialization, pending-update cancellation, generation scheduling, reset acknowledgement and finder recreation')
 

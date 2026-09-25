@@ -74,6 +74,7 @@ const triggerCompatibilityConfig = {
     fixedToleranceMilliseconds: 2000
 }
 const triggerDiffToleranceMatrix = [[]]
+let stationDistanceTable = null
 const bearingDirections = ['N', 'E', 'S', 'W']
 const minHypocenterNeighborsPerDirection = 2
 let decimal = [0, 0]
@@ -269,7 +270,8 @@ const getHypocenterWorker = () => {
     }
     worker.postMessage({
         type: 'init',
-        adjStations: adjStations4Hypo
+        adjStations: adjStations4Hypo,
+        stationDistanceTable
     })
     return worker
 }
@@ -627,7 +629,7 @@ const fetchStationList = async () => {
             triggerDiffToleranceMatrix.length = 0
             for(let i = 0; i < stationList.length; i++){
                 const distances = []
-                distanceMatrix[i] = []
+                distanceMatrix[i] = new Float64Array(stationList.length)
                 for(let j = 0; j < stationList.length; j++){
                     let distance
                     if(j < i) {
@@ -677,13 +679,16 @@ const fetchStationList = async () => {
                 expireSeconds[i] = 8
             }
             distanceMatrix.forEach(distanceRow => {
-                for(let i = 0; i < distanceRow.length; i++) {
-                    distanceRow[i] =
-                        distanceRow[i] / triggerCompatibilityConfig.waveSpeedKmPerSecond * 1000 +
-                        triggerCompatibilityConfig.fixedToleranceMilliseconds
-                }
-                triggerDiffToleranceMatrix.push(distanceRow)
+                // Keep distances in km for inference; activation uses a separate tolerance row.
+                triggerDiffToleranceMatrix.push(distanceRow.map(distance =>
+                    distance / triggerCompatibilityConfig.waveSpeedKmPerSecond * 1000 +
+                    triggerCompatibilityConfig.fixedToleranceMilliseconds
+                ))
             })
+            stationDistanceTable = {
+                indexes: Object.fromEntries(stationList.map((_, index) => [index, index])),
+                rows: distanceMatrix
+            }
             stationList.forEach((latLng, index)=>{
                 const station = reactive(new NiedStation(map, index, latLng, 'c', expireSeconds[index], useStationCanvasRenderer.value))
                 stations.push(station)

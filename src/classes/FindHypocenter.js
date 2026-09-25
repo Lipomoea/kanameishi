@@ -8,7 +8,7 @@ const compareStrings = (value1, value2) => {
 }
 
 export class FindHypocenter {
-    constructor(inactiveStations, adjStations, profile, stationDensityWeights = null) {
+    constructor(inactiveStations, adjStations, profile, stationDensityWeights = null, stationDistanceTable = null) {
         this.profile = profile
         this.parameters = profile.parameters
         this.picks = new Map()
@@ -25,6 +25,7 @@ export class FindHypocenter {
         this.inactivePenaltyCandidateCache = new WeakMap()
         this.adjStations = adjStations
         this.stationDensityWeights = stationDensityWeights ?? FindHypocenter.calcStationDensityWeights(adjStations)
+        this.stationDistanceTable = stationDistanceTable
         this.nextClusterId = 1
         this.updateVersion = 0
         this.setInactiveStations(inactiveStations)
@@ -533,9 +534,30 @@ export class FindHypocenter {
     }
 
     createInactivePenaltyContext(picks) {
+        const stations = [...new Map((picks || []).map(pick => [pick.stationId, pick])).values()]
+        const stationCount = stations.length
+        let penaltyWeightStationCount = stationCount
+        // Fix the breadth station bonus before searching, including the duplicate-pick refit.
+        if(stationCount < this.parameters.penaltyZeroWeightStationCount && stationCount > 1 && this.parameters.penaltyBreadthKmPerStation > 0) {
+            const distanceRows = stations.map(pick => this.stationDistanceTable?.rows[this.stationDistanceTable.indexes[pick.stationId]])
+            const distanceIndexes = stations.map(pick => this.stationDistanceTable?.indexes[pick.stationId])
+            let distanceSum = 0
+            for(let i = 0; i < stationCount; i++) {
+                for(let j = 0; j < i; j++) {
+                    // Standalone callers without a roster table retain coordinate-based calculation.
+                    distanceSum += distanceRows[i]?.[distanceIndexes[j]] ??
+                        calcDistanceKm(stations[i].latLng ?? [], stations[j].latLng ?? [])
+                }
+            }
+            const breadthKm = distanceSum / (stationCount * (stationCount - 1) / 2)
+            if(Number.isFinite(breadthKm)) {
+                penaltyWeightStationCount += breadthKm / this.parameters.penaltyBreadthKmPerStation
+            }
+        }
         return {
             picks,
-            stationCount: this.getDistinctStationCount(picks)
+            stationCount,
+            inactivePenaltyWeight: this.calcInactivePenaltyWeight(penaltyWeightStationCount)
         }
     }
 
@@ -1083,16 +1105,13 @@ export class FindHypocenter {
         }
         const originStamp = this.calcWeightedMean(originEntries)
         const rmse = this.calcWeightedRmse(originEntries, originStamp) / 1000
-        const { penalty: inactivePenalty, exceeded } = this.calcInactiveStationPenalty(
+        const inactivePenalty = this.calcInactiveStationPenalty(
             hypocenter,
             penaltyContext.picks,
             optionCache,
             penaltyContext.stationCount
         )
-        if(exceeded) {
-            return this.createInvalidLikelihood(firstWave, lastWave, scenario)
-        }
-        const inactivePenaltyWeight = this.calcInactivePenaltyWeight(penaltyContext.stationCount)
+        const inactivePenaltyWeight = penaltyContext.inactivePenaltyWeight
         const waveCountPenalty = this.calcWaveCountPenalty(
             pickResults,
             filterStage?.waveCountPenalty ?? this.parameters.defaultWaveCountPenaltyConfig
@@ -1274,29 +1293,20 @@ export class FindHypocenter {
     }
 
     calcInactiveStationPenalty(hypocenter, penaltyPicks, optionCache, penaltyStationCount = this.getDistinctStationCount(penaltyPicks)) {
-        if(penaltyStationCount >= this.parameters.penaltyZeroWeightStationCount) {
-            return { penalty: 0, exceeded: false }
+        if(penaltyStationCount <= 0 || penaltyStationCount >= this.parameters.penaltyZeroWeightStationCount) {
+            return 0
         }
         const referenceDistance = this.getInactivePenaltyReferenceDistance(penaltyPicks, hypocenter, optionCache)
         if(referenceDistance === null) {
-            return { penalty: 0, exceeded: false }
+            return 0
         }
         const stations = this.getSortedInactiveStations(penaltyPicks, hypocenter, optionCache)
         if(stations.length === 0) {
-            return { penalty: 0, exceeded: false }
+            return 0
         }
 
-        const lastIndex = stations.length - 1
-        if(Number.isFinite(penaltyStationCount) && stations.length > penaltyStationCount) {
-            if(this.isInactiveStationPenalized(stations[penaltyStationCount], hypocenter, optionCache, referenceDistance)) {
-                return { penalty: penaltyStationCount + 1, exceeded: true }
-            }
-            const penalty = this.findLastPenalizedStationIndex(stations, 0, penaltyStationCount - 1, hypocenter, optionCache, referenceDistance) + 1
-            return { penalty: this.normalizeInactivePenalty(penalty, penaltyStationCount), exceeded: false }
-        }
-
-        const penalty = this.findLastPenalizedStationIndex(stations, 0, lastIndex, hypocenter, optionCache, referenceDistance) + 1
-        return { penalty: this.normalizeInactivePenalty(penalty, penaltyStationCount), exceeded: false }
+        const penalty = this.findLastPenalizedStationIndex(stations, 0, stations.length - 1, hypocenter, optionCache, referenceDistance) + 1
+        return this.normalizeInactivePenalty(penalty, penaltyStationCount)
     }
 
     normalizeInactivePenalty(penalty, denominator) {

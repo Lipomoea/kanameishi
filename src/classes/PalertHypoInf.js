@@ -2,8 +2,8 @@ import { FindHypocenter } from './FindHypocenter'
 import { palertHypocenterProfile } from './PalertHypocenterProfile'
 
 export class FindPalertHypocenter extends FindHypocenter {
-    constructor(inactiveStations, adjStations, stationDensityWeights = null) {
-        super(inactiveStations, adjStations, palertHypocenterProfile, stationDensityWeights)
+    constructor(inactiveStations, adjStations, stationDensityWeights = null, stationDistanceTable = null) {
+        super(inactiveStations, adjStations, palertHypocenterProfile, stationDensityWeights, stationDistanceTable)
     }
 
     setInactiveStations(inactiveStations) {

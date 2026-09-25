@@ -29,6 +29,7 @@ let hypocenterRequestId = 0
 let inFlightHypocenterRequestId = null
 let pendingHypocenterUpdate = null
 let adjStations4Hypo = {}
+let stationDistanceTable = null
 let inferredHypocenterMap = null
 let inferredHypocenterLayers = null
 let inferredHypocenterLabelLayers = []
@@ -244,7 +245,7 @@ const getHypocenterWorker = () => {
         clearInferredHypocenters()
         console.error(error)
     }
-    worker.postMessage({ type: 'init', adjStations: adjStations4Hypo })
+    worker.postMessage({ type: 'init', adjStations: adjStations4Hypo, stationDistanceTable })
     return worker
 }
 const resetHypocenterWorker = () => {
@@ -487,12 +488,17 @@ const buildAdjStations = () => {
     const detectionAdjStations = {}
     const hypocenterAdjStations = {}
     const triggerDiffTolerances = {}
-    stationIds.forEach(id => {
+    const distanceTable = {
+        indexes: Object.fromEntries(stationIds.map((id, index) => [id, index])),
+        rows: stationIds.map(() => new Float64Array(stationIds.length))
+    }
+    stationIds.forEach((id, index) => {
         const sortedDistances = stationIds
-            .map(stationId => ({
-                stationId,
-                distance: calcDistanceKm(stations[id].latLng, stations[stationId].latLng)
-            }))
+            .map((stationId, neighborIndex) => {
+                const distance = calcDistanceKm(stations[id].latLng, stations[stationId].latLng)
+                distanceTable.rows[index][neighborIndex] = distance
+                return { stationId, distance }
+            })
             .sort((a, b) => a.distance - b.distance)
         // Keep all local activation neighbors, filling sparse neighborhoods to four within 40 km.
         const nearbyDistances = sortedDistances.filter(({ distance }) => distance <= 30)
@@ -527,7 +533,7 @@ const buildAdjStations = () => {
             })
         hypocenterAdjStations[id] = nearbyStations
     })
-    return { detectionAdjStations, hypocenterAdjStations, triggerDiffTolerances }
+    return { detectionAdjStations, hypocenterAdjStations, triggerDiffTolerances, stationDistanceTable: distanceTable }
 }
 const clearTimelineState = (render = true) => {
     frameQueue.reset()
@@ -614,6 +620,7 @@ unwatchMap = watch(() => statusStore.map, newVal => {
         adjStationIds = adjacency.detectionAdjStations
         adjStations4Hypo = adjacency.hypocenterAdjStations
         triggerDiffToleranceMatrix = adjacency.triggerDiffTolerances
+        stationDistanceTable = adjacency.stationDistanceTable
         renderAll()
     }, { immediate: true })
     unwatchActivity = watch(activeLevels, newVal => {
