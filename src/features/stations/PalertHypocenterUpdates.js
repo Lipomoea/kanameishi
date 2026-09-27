@@ -1,3 +1,5 @@
+import { createHypocenterTriggerSnapshots } from './HypocenterTriggerSnapshots'
+
 const mergeMetrics = (previous, next) => ({
     ...previous,
     ...next,
@@ -17,6 +19,7 @@ export const mergePalertHypocenterUpdates = (previous, next) => {
     }
     const previousStations = new Map((previous.activeStations || []).map(station => [station.id, station]))
     return {
+        // Unlike queued picks, trigger evidence comes entirely from the latest frame.
         ...next,
         pickCandidates: [...picks.values()],
         activeStations: (next.activeStations || []).map(station => {
@@ -27,7 +30,7 @@ export const mergePalertHypocenterUpdates = (previous, next) => {
     }
 }
 
-export const createPalertHypocenterUpdate = stations => {
+export const createPalertHypocenterUpdate = (stations, frameStamp) => {
     const snapshot = station => ({
         id: station.id,
         latLng: [...station.latLng],
@@ -41,6 +44,8 @@ export const createPalertHypocenterUpdate = stations => {
     const activeSources = stations.filter(station => station.isActive)
     const activeStations = activeSources.map(snapshot)
     return {
+        frameStamp,
+        triggerStations: createHypocenterTriggerSnapshots(stations),
         // A pick can close on this frame while its station remains active. Send its final metrics once more.
         pickCandidates: activeSources.flatMap((station, index) => station.completedPick
             ? [{ ...activeStations[index], ...station.completedPick }, activeStations[index]]

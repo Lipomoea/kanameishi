@@ -21,6 +21,7 @@ import { NiedStationCanvasLayer } from '@/classes/StationCanvasLayer';
 import { NiedGridCanvasLayer } from '@/classes/GridCanvasLayer';
 import { niedSitePub } from '@/utils/NiedSitePub';
 import { mergeNiedHypocenterUpdates } from '@/features/stations/NiedHypocenterUpdates';
+import { createHypocenterTriggerSnapshots } from '@/features/stations/HypocenterTriggerSnapshots';
 import travelTimes from '@/utils/TravelTimes';
 import infHypoIconUrl from '@/assets/icon/hypocenter/infHypo.svg';
 
@@ -68,7 +69,6 @@ const currentMaxShindo = computed(()=>{
 })
 const adjStationIds = {}
 const adjStations4Hypo = {}
-const expireSeconds = {}
 const triggerCompatibilityConfig = {
     waveSpeedKmPerSecond: 3.5,
     fixedToleranceMilliseconds: 2000
@@ -221,15 +221,11 @@ const update = ()=>{
             terminateHypocenterWorker()
             clearInferredHypocenters()
         }
-        else if(currentActiveStations.length > 0) {
+        else {
             const pickCandidateStations = currentActiveStations.filter(station =>
                 station.ascend >= 2 && Number.isFinite(station.triggerStamp) && station.triggerStamp > 0
             )
-            updateInferredHypocentersInWorker(pickCandidateStations, currentActiveStations, inactiveStations)
-        }
-        else {
-            resetHypocenterWorker()
-            clearInferredHypocenters()
+            updateInferredHypocentersInWorker(pickCandidateStations, currentActiveStations, inactiveStations, updateStamp)
         }
     }
 }
@@ -311,9 +307,11 @@ const stationToInferredHypocenterPickSnapshot = station => ({
     ascend: station.ascend,
     level: station.level
 })
-const updateInferredHypocentersInWorker = (pickCandidateStations, activeStations, inactiveStations) => {
+const updateInferredHypocentersInWorker = (pickCandidateStations, activeStations, inactiveStations, frameStamp) => {
     if(!isNiedHypoInfEnabled()) return
     const update = {
+        frameStamp,
+        triggerStations: createHypocenterTriggerSnapshots(stations),
         pickCandidates: pickCandidateStations.map(stationToInferredHypocenterPickSnapshot),
         activeStations: activeStations.map(stationToInferredHypocenterSnapshot),
         inactiveStations: [...inactiveStations].map(stationToInferredHypocenterSnapshot)
@@ -674,9 +672,6 @@ const fetchStationList = async () => {
                     stationId: obj.id,
                     distance: obj.distance
                 }))
-                // const maxDist = distances[distances.length - 1].distance
-                // expireSeconds[i] = Math.max(Math.ceil(maxDist / 3.5), 5)
-                expireSeconds[i] = 8
             }
             distanceMatrix.forEach(distanceRow => {
                 // Keep distances in km for inference; activation uses a separate tolerance row.
@@ -690,7 +685,7 @@ const fetchStationList = async () => {
                 rows: distanceMatrix
             }
             stationList.forEach((latLng, index)=>{
-                const station = reactive(new NiedStation(map, index, latLng, 'c', expireSeconds[index], useStationCanvasRenderer.value))
+                const station = reactive(new NiedStation(map, index, latLng, 'c', useStationCanvasRenderer.value))
                 stations.push(station)
             })
             initStationCanvasLayer()

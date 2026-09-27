@@ -32,7 +32,8 @@ export const niedHypocenterProfile = {
         penaltyReferenceQuantile: 0.9,
         pickAssociationVelocity: 3.5,
         pickAssociationPadding: 2000,
-        clusterMatchResidualTieTolerance: 1000,
+        clusterMatchMeanResidualTieTolerance: 500,
+        clusterMatchResidualTieTolerance: 500,
         duplicatePickResidualTieTolerance: 1000,
         stableHypocenterUpdateThreshold: 15,
         sameHypocenterThreshold: {
@@ -45,13 +46,13 @@ export const niedHypocenterProfile = {
         defaultClusterMatchResidual: minResidualThreshold,
         largeClusterMatchResidual: 7500,
         largeClusterMatchStationCount: 50,
-        defaultWaveCountPenaltyConfig: { thresholdRatio: 3, maxPenalty: 2 },
+        defaultWaveCountPenaltyConfig: { thresholdRatio: 3, maxPenalty: 1 },
         unexplainedPickPenaltyWeight: 1,
         minUnexplainedPickPenaltyDenominator: 10,
         inheritedOutlierFilterStages: [
-            { level: 3, minCount: 100, minRemainingInheritedRatio: 0.9, ratio: 2, minResidual: 3000, maxMeanResidual: 1500, waveCountPenalty: { thresholdRatio: 4.5, maxPenalty: 0.5 } },
-            { level: 2, minCount: 30, minRemainingInheritedRatio: 0.8, ratio: 2.5, minResidual: 4000, maxMeanResidual: 2000, waveCountPenalty: { thresholdRatio: 4, maxPenalty: 1 } },
-            { level: 1, minCount: 10, minRemainingInheritedRatio: 0.5, ratio: 3, minResidual: 5000, waveCountPenalty: { thresholdRatio: 3.5, maxPenalty: 1.5 } }
+            { level: 3, minCount: 100, minRemainingInheritedRatio: 0.9, ratio: 2, minResidual: 3000, maxMeanResidual: 1500, waveCountPenalty: { thresholdRatio: 4.5, maxPenalty: 0 } },
+            { level: 2, minCount: 30, minRemainingInheritedRatio: 0.8, ratio: 2.5, minResidual: 4000, maxMeanResidual: 2000, waveCountPenalty: { thresholdRatio: 4, maxPenalty: 0 } },
+            { level: 1, minCount: 10, minRemainingInheritedRatio: 0.5, ratio: 3, minResidual: 5000, waveCountPenalty: { thresholdRatio: 3.5, maxPenalty: 0.5 } }
         ],
         minReliablePickCount: 100,
         minGreedyOutlierPickCount: 30,

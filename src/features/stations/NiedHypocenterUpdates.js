@@ -1,6 +1,7 @@
 export const mergeNiedHypocenterUpdates = (previousUpdate, nextUpdate) => {
     if(!previousUpdate) return nextUpdate
     return {
+        // Unlike queued picks, trigger evidence comes entirely from the latest frame.
         ...nextUpdate,
         pickCandidates: mergePicksById(previousUpdate.pickCandidates, nextUpdate.pickCandidates),
         activeStations: mergeActiveStationsById(previousUpdate.activeStations, nextUpdate.activeStations)

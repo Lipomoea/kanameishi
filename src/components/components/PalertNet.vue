@@ -223,7 +223,7 @@ const commitFrame = (frameStamp, pgaData, pgvData, generation) => {
 const updateHypocenters = () => {
     if(!isHypocenterEnabled.value || pendingTimelineSwitch) return
     const currentStations = Object.values(stations)
-    updateInferredHypocentersInWorker(createPalertHypocenterUpdate(currentStations))
+    updateInferredHypocentersInWorker(createPalertHypocenterUpdate(currentStations, latestFrameStamp))
 }
 const getHypocenterWorker = () => {
     if(hypocenterWorker) return hypocenterWorker
@@ -263,11 +263,6 @@ const terminateHypocenterWorker = () => {
     hypocenterWorker = null
 }
 const updateInferredHypocentersInWorker = update => {
-    if(update.activeStations.length === 0) {
-        resetHypocenterWorker()
-        clearInferredHypocenters()
-        return
-    }
     if(inFlightHypocenterRequestId !== null) {
         pendingHypocenterUpdate = mergePalertHypocenterUpdates(pendingHypocenterUpdate, update)
         return

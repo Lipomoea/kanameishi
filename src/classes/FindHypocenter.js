@@ -1,6 +1,7 @@
 import { calcDistanceKm, calcLngDiff, calcReachTime, compareFloat, exactRound } from '@/utils/Utils'
 
 const sortedInactiveStationsCacheKey = Symbol('sortedInactiveStations')
+const clusterDormancyDuration = 30000
 const compareStrings = (value1, value2) => {
     const string1 = String(value1)
     const string2 = String(value2)
@@ -15,6 +16,7 @@ export class FindHypocenter {
         this.clusters = []
         this.pickClusterMap = new Map()
         this.stationPickMap = new Map()
+        this.triggerStations = new Map()
         this.latestPickIdByStation = new Map()
         this.latestPickStampByStation = new Map()
         this.pickStationPresenceVersion = 0
@@ -28,25 +30,38 @@ export class FindHypocenter {
         this.stationDistanceTable = stationDistanceTable
         this.nextClusterId = 1
         this.updateVersion = 0
+        this.frameStamp = null
         this.setInactiveStations(inactiveStations)
     }
 
-    update(pickCandidates = [], inactiveStations = this.inactiveStations, stationUpdates = []) {
+    update(pickCandidates = [], inactiveStations = this.inactiveStations, stationUpdates = [], frameStamp = null, triggerStations = stationUpdates) {
         this.updateVersion++
+        // Legacy callers can use snapshot time; quiet frames must pass their data timestamp explicitly.
+        if(!Number.isFinite(frameStamp)) {
+            frameStamp = [...pickCandidates, ...stationUpdates, ...Array.from(inactiveStations || [])]
+                .reduce((latest, source) => Number.isFinite(source.updateStamp)
+                    ? Math.max(latest ?? source.updateStamp, source.updateStamp) : latest, this.frameStamp)
+        }
+        if(Number.isFinite(frameStamp)) this.frameStamp = Math.max(this.frameStamp ?? frameStamp, frameStamp)
+        // Expired picks must not participate in association, including on a large frame-time jump.
+        this.removeExpiredClusters()
         this.setInactiveStations(inactiveStations)
         const activeStationIds = new Set(stationUpdates.map(station => station.id))
+        this.setTriggerStations(triggerStations)
+        // Apply this frame's support state before association can merge clusters.
+        this.hibernateFinishedClusters(activeStationIds)
         pickCandidates
             .slice()
             .sort((pick1, pick2) => this.comparePicks(pick1, pick2))
-            .forEach(pick => this.upsertPickCandidate(pick))
+            .forEach(pick => this.upsertPickCandidate(pick, activeStationIds.has(pick.stationId)))
         this.updateActivePickSources(stationUpdates)
         this.refreshClusterResults()
         this.mergeCloseClusters()
-        this.removeFinishedClusters(activeStationIds)
+        this.hibernateFinishedClusters(activeStationIds)
         return this.getResults()
     }
 
-    upsertPickCandidate(pick) {
+    upsertPickCandidate(pick, isActiveSource = false) {
         if(!this.hasValidPickCandidate(pick)) return
         const existingPick = this.picks.get(pick.pickId)
         if(existingPick) {
@@ -62,13 +77,15 @@ export class FindHypocenter {
         if(matchingCluster) neighborClusterSet.add(matchingCluster)
         const neighborClusters = [...neighborClusterSet]
         if(neighborClusters.length === 0) {
-            this.createCluster([pickSnapshot], null, true)
+            const cluster = this.createCluster([pickSnapshot], null, true)
+            if(!isActiveSource && Number.isFinite(this.frameStamp)) cluster.dormantSince = this.frameStamp
         }
         else if(neighborClusters.length === 1) {
             this.addPickToCluster(pickSnapshot, neighborClusters[0])
+            if(isActiveSource) neighborClusters[0].dormantSince = null
         }
         else {
-            this.mergeAdjacentClusters(pickSnapshot, neighborClusters)
+            this.mergeAdjacentClusters(pickSnapshot, neighborClusters, isActiveSource)
         }
     }
 
@@ -128,6 +145,13 @@ export class FindHypocenter {
         })
     }
 
+    setTriggerStations(stations) {
+        // Replace the entire frame so expired triggers cannot survive from earlier updates.
+        this.triggerStations = new Map(stations
+            .filter(station => this.hasValidTriggerStamp(station))
+            .map(station => [station.stationId ?? station.id, station]))
+    }
+
     updatePickSnapshot(pickSnapshot, source) {
         if(this.latestPickIdByStation.get(pickSnapshot.stationId) !== pickSnapshot.pickId) return
         pickSnapshot.updateStamp = Math.max(pickSnapshot.updateStamp || 0, source.updateStamp || 0)
@@ -158,19 +182,44 @@ export class FindHypocenter {
 
     findBestMatchingCluster(pick) {
         if(!this.hasValidTriggerStamp(pick)) return null
-        const matches = this.clusters.map(cluster => {
+        let matches = this.clusters.map(cluster => {
             const match = this.calcClusterPickMatch(pick, cluster)
             return match ? { cluster, ...match } : null
         }).filter(match =>
             match && match.residual <= this.getClusterMatchResidualThreshold(match.cluster)
         )
         if(matches.length === 0) return null
+        if(matches.length === 1) return matches[0].cluster
+
+        // Every candidate uses the same neighborhood. A contributes exactly once, with the
+        // pick being associated even if its station already has a newer trigger.
+        const neighbors = []
+        const seen = new Set([pick.stationId])
+        for(const { stationId } of this.adjStations?.[pick.stationId] || []) {
+            if(seen.has(stationId)) continue
+            seen.add(stationId)
+            const station = this.triggerStations.get(stationId)
+            if(station) neighbors.push(station)
+        }
+        matches.forEach(match => {
+            let residualSum = match.residual
+            for(const station of neighbors) {
+                const residual = this.calcClusterPickMatch(station, match.cluster)?.residual
+                residualSum += Number.isFinite(residual) ? residual : Infinity
+            }
+            match.meanResidual = residualSum / (neighbors.length + 1)
+        })
+        const minMeanResidual = Math.min(...matches.map(match => match.meanResidual))
+        // If no model can predict the neighborhood, use the available own-pick evidence.
+        if(Number.isFinite(minMeanResidual)) {
+            matches = matches.filter(match =>
+                match.meanResidual - minMeanResidual <= this.parameters.clusterMatchMeanResidualTieTolerance)
+        }
         const minResidual = Math.min(...matches.map(match => match.residual))
         return matches
-            .filter(match => match.residual - minResidual < this.parameters.clusterMatchResidualTieTolerance)
+            .filter(match => match.residual - minResidual <= this.parameters.clusterMatchResidualTieTolerance)
             .reduce((best, match) => {
                 if(match.distance !== best.distance) return match.distance < best.distance ? match : best
-                if(match.residual !== best.residual) return match.residual < best.residual ? match : best
                 return match.cluster.id < best.cluster.id ? match : best
             }).cluster
     }
@@ -211,6 +260,7 @@ export class FindHypocenter {
             stableHypocenterUpdateCount: 0,
             stable: false,
             lastUpdateVersion: null,
+            dormantSince: null,
             initialHypocenter
         }
         picks.forEach(pick => this.addPickToCluster(pick, cluster, markUpdated))
@@ -254,7 +304,7 @@ export class FindHypocenter {
         cluster.dirty = true
     }
 
-    mergeAdjacentClusters(pick, clusters) {
+    mergeAdjacentClusters(pick, clusters, isActiveSource = false) {
         const baseCluster = clusters.reduce((best, cluster) => 
             this.selectMergeBaseCluster(best, cluster)
         )
@@ -271,8 +321,22 @@ export class FindHypocenter {
         this.copyClusterStableState(mergedCluster, baseCluster)
         mergedCluster.previousResults = baseCluster.previousResults
         mergedCluster.lastUpdateVersion = baseCluster.lastUpdateVersion
+        mergedCluster.dormantSince = isActiveSource ? null : this.getMergedDormantSince(clusters)
+        this.retainDormantClusterResult(mergedCluster, clusters)
         this.markClusterUpdated(mergedCluster)
         return mergedCluster
+    }
+
+    retainDormantClusterResult(cluster, sources) {
+        if(cluster.dormantSince === null) return
+        // Keep a prior solution for association until the merged cluster wakes and refits.
+        const source = sources
+            .filter(source => source.result?.hypocenter && Number.isFinite(source.result.originStamp))
+            .reduce((best, source) => best ? this.selectMergeBaseCluster(best, source) : source, null)
+        if(!source) return
+        cluster.result = source.result
+        cluster.initialHypocenter = source.result.hypocenter
+        cluster.previousResults = source.previousResults
     }
 
     removeCluster(cluster) {
@@ -284,8 +348,25 @@ export class FindHypocenter {
         })
     }
 
-    removeFinishedClusters(activeStationIds) {
-        const finishedClusters = this.clusters.filter(cluster => this.isClusterFinished(cluster, activeStationIds))
+    hibernateFinishedClusters(activeStationIds) {
+        if(!Number.isFinite(this.frameStamp)) return
+        this.clusters.forEach(cluster => {
+            if(cluster.dormantSince === null && this.isClusterFinished(cluster, activeStationIds)) {
+                cluster.dormantSince = this.frameStamp
+            }
+        })
+    }
+
+    getMergedDormantSince(clusters) {
+        // An active member wakes the merged cluster. Background dormant merges keep the earliest expiry.
+        return clusters.some(cluster => cluster.dormantSince === null)
+            ? null : Math.min(...clusters.map(cluster => cluster.dormantSince))
+    }
+
+    removeExpiredClusters() {
+        if(!Number.isFinite(this.frameStamp)) return
+        const finishedClusters = this.clusters.filter(cluster => cluster.dormantSince !== null &&
+            this.frameStamp - cluster.dormantSince > clusterDormancyDuration)
         const previousPickStationPresenceVersion = this.pickStationPresenceVersion
         finishedClusters.forEach(cluster => {
             const picks = [...cluster.picks]
@@ -337,7 +418,8 @@ export class FindHypocenter {
 
     refreshClusterResults() {
         this.clusters.forEach(cluster => {
-            if(!cluster.dirty) return
+            // Keep dirty state and the last solution while asleep; association and indexes still update.
+            if(cluster.dormantSince !== null || !cluster.dirty) return
             // this.logClusterTriggerStamps(cluster)
             if(this.getClusterStationCount(cluster) < this.parameters.minInferenceStationCount) {
                 cluster.result = this.createClusterResult(cluster, this.createHypocenterResult(null, this.createInvalidLikelihood(null)))
@@ -620,9 +702,10 @@ export class FindHypocenter {
                         this.copyClusterStableState(mergedCluster, baseCluster)
                         mergedCluster.previousResults = baseCluster.previousResults
                         mergedCluster.lastUpdateVersion = baseCluster.lastUpdateVersion
+                        mergedCluster.dormantSince = this.getMergedDormantSince([cluster1, cluster2])
+                        this.retainDormantClusterResult(mergedCluster, [cluster1, cluster2])
                         this.markClusterUpdated(mergedCluster)
                         this.refreshClusterResults()
-                        mergedCluster.dirty = false
                         merged = true
                         break
                     }
@@ -657,6 +740,7 @@ export class FindHypocenter {
 
     getResults() {
         return this.clusters
+            .filter(cluster => cluster.dormantSince === null)
             .map(cluster => cluster.result && {
                 ...cluster.result,
                 updates: cluster.updates,

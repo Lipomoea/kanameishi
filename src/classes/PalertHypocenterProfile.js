@@ -6,10 +6,10 @@ const parameters = structuredClone(niedHypocenterProfile.parameters)
 parameters.penaltyFullWeight = 8
 parameters.penaltyReferenceQuantile = 0.8
 const waveCountPenaltyConfigs = [
-    { thresholdRatio: 8, maxPenalty: 2 },
-    { thresholdRatio: 9, maxPenalty: 1.5 },
-    { thresholdRatio: 10, maxPenalty: 1 },
-    { thresholdRatio: 11, maxPenalty: 0.5 }
+    { thresholdRatio: 8, maxPenalty: 1 },
+    { thresholdRatio: 9, maxPenalty: 0.5 },
+    { thresholdRatio: 10, maxPenalty: 0 },
+    { thresholdRatio: 11, maxPenalty: 0 }
 ]
 parameters.waveCountPenaltySlope = 0.5
 parameters.defaultWaveCountPenaltyConfig = waveCountPenaltyConfigs[0]

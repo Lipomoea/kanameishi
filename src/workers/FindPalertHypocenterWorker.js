@@ -34,8 +34,11 @@ self.onmessage = ({ data: message }) => {
         const update = pendingUpdate
         pendingUpdate = null
         if(!update) return
-        finder ??= new FindPalertHypocenter(update.inactiveStations, adjStations, stationDensityWeights, stationDistanceTable)
-        const results = finder.update(update.pickCandidates, update.inactiveStations, update.activeStations)
+        if(!finder && (update.activeStations.length > 0 || update.pickCandidates.length > 0)) {
+            finder = new FindPalertHypocenter(update.inactiveStations, adjStations, stationDensityWeights, stationDistanceTable)
+        }
+        const results = finder?.update(update.pickCandidates, update.inactiveStations, update.activeStations, update.frameStamp, update.triggerStations) ?? []
+        if(update.activeStations.length === 0 && finder?.clusters.length === 0) finder = null
         self.postMessage({ requestId: update.requestId, results })
     }, 0)
 }

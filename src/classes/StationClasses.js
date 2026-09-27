@@ -697,12 +697,11 @@ export class TremStation {
     }
 }
 export class NiedStation {
-    constructor(map, id, latLng, intensity, expireSeconds, useCanvasLayer = false){
+    constructor(map, id, latLng, intensity, useCanvasLayer = false){
         if(!settingsStore) settingsStore = useSettingsStore()
         this.map = markRaw(map)
         this.id = id
         this.latLng = latLng
-        this.expireSeconds = expireSeconds
         this.useCanvasLayer = useCanvasLayer
         this.maxRecentLength = 60
         this.shindo = getShindoFromChar(intensity)
@@ -757,7 +756,9 @@ export class NiedStation {
             return { ascend: 0, triggerStamp: 0 };
         }
         const triggerSourceIndexes = this.recentLevel.map((level, index) => level === -1 ? -1 : index);
+        const expireSeconds = 8;
         const maxShortValleyLength = 2;
+        const maxWeakRisePlateauLength = 4;
         // Resolve missing values before measuring short valleys.
         let segmentStartIndex = 0;
         while(segmentStartIndex < arr.length) {
@@ -782,7 +783,7 @@ export class NiedStation {
                     missingEndIndex++;
                 }
                 const missingLength = missingEndIndex - missingStartIndex;
-                if(missingLength > this.expireSeconds || missingEndIndex >= arr.length) {
+                if(missingLength > expireSeconds || missingEndIndex >= arr.length) {
                     arr.splice(missingStartIndex);
                     triggerSourceIndexes.splice(missingStartIndex);
                     truncated = true;
@@ -849,12 +850,29 @@ export class NiedStation {
                 identicalCount = 1;
             } else {
                 identicalCount++;
-                if (identicalCount > this.expireSeconds) {
+                if (identicalCount > expireSeconds) {
                     break;
                 }
             }
         }
+        // Keep the original eight-second search, then trim expired weak prefixes
+        // chronologically. Later strong rises cannot rescue an earlier +1 plateau.
+        let risePeak = latestMinVal;
+        let plateauLength = 1;
+        for (let i = latestMinIndex - 1; i >= 0; i--) {
+            const level = arr[i];
+            plateauLength = level === arr[i + 1] ? plateauLength + 1 : 1;
+            risePeak = Math.max(risePeak, level);
+            if (level <= latestMinVal || (
+                risePeak - latestMinVal === 1 && plateauLength > maxWeakRisePlateauLength
+            )) {
+                latestMinVal = level;
+                latestMinIndex = i;
+                risePeak = level;
+            }
+        }
         const ascend = Math.max(this.level - latestMinVal, 0);
+        // Filled samples preserve continuity but leave an onset here uncertain.
         const triggerSourceIndex = triggerSourceIndexes[latestMinIndex];
         const triggerStamp = ascend > 0 && triggerSourceIndex >= 0
             ? this.updateStamp - triggerSourceIndex * 1000

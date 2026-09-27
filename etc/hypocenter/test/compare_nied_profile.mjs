@@ -54,8 +54,23 @@ const Core = modules.get(path.join(root, 'src/classes/FindHypocenter.js')).names
 const profile = modules.get(path.join(root, 'src/classes/NiedHypocenterProfile.js')).namespace.niedHypocenterProfile
 const { calcDistanceKm, calcReachTime } = modules.get(path.join(root, 'src/utils/Utils.js')).namespace
 const travelTimes = modules.get(path.join(root, 'src/utils/TravelTimes.js')).namespace.default
-for(const name of parameterNames) assert.deepStrictEqual(profile.parameters[name], baselineModule.namespace.baselineParameters[name], name)
-console.log(`PASS ${parameterNames.length} parameters against the unmodified original NIED baseline`)
+const baselineParameters = baselineModule.namespace.baselineParameters
+const expectedParameters = structuredClone(baselineParameters)
+expectedParameters.clusterMatchResidualTieTolerance = 500
+const expectedCaps = [1, 0.5, 0, 0]
+expectedParameters.defaultWaveCountPenaltyConfig.maxPenalty = expectedCaps[0]
+for(const stage of expectedParameters.inheritedOutlierFilterStages) stage.waveCountPenalty.maxPenalty = expectedCaps[stage.level]
+for(const name of parameterNames) assert.deepStrictEqual(profile.parameters[name], expectedParameters[name], name)
+console.log(`PASS ${parameterNames.length} parameters: updated phase caps and association tolerance, original solver thresholds and filter eligibility`)
+
+// Restore only the intentional cap changes on isolated comparison finders.
+// Production settings are checked separately below; the baseline stays unmodified.
+const withBaselineWavePenalties = finder => {
+    finder.parameters = { ...finder.parameters,
+        defaultWaveCountPenaltyConfig: structuredClone(baselineParameters.defaultWaveCountPenaltyConfig),
+        inheritedOutlierFilterStages: structuredClone(baselineParameters.inheritedOutlierFilterStages) }
+    return finder
+}
 
 let comparisons = 0
 const equal = (current, baseline, label) => {
@@ -63,7 +78,7 @@ const equal = (current, baseline, label) => {
     comparisons++
 }
 const oldFinder = new Baseline([], {})
-const newFinder = new Current([], {})
+const newFinder = withBaselineWavePenalties(new Current([], {}))
 const compareMethod = (name, ...args) => equal(newFinder[name](...args), oldFinder[name](...args), name)
 const stamp = 1788880000000
 for(const id of [0, 1, -1, 1.5, '1', 'W460', '', null, undefined, NaN, Infinity]) {
@@ -109,7 +124,7 @@ for(const pCount of [0, 1, 4]) {
             ...Array.from({ length: sCount }, () => ({ wave: 'S', weight: 1 }))
         ]
         compareMethod('calcWaveCountPenalty', picks)
-        for(const stage of profile.parameters.inheritedOutlierFilterStages) compareMethod('calcWaveCountPenalty', picks, stage.waveCountPenalty)
+        for(const stage of newFinder.parameters.inheritedOutlierFilterStages) compareMethod('calcWaveCountPenalty', picks, stage.waveCountPenalty)
     }
 }
 const entries = Array.from({ length: 30 }, (_, i) => ({ value: stamp + (i % 2 ? 100 : -100), weight: 1 }))
@@ -143,29 +158,79 @@ const makePick = (station, wave = 'P', originStamp = stamp, center = hypocenter)
     return { stationId: station.id, pickId: `${station.id}:${triggerStamp}`, latLng: station.latLng,
         triggerStamp, updateStamp: triggerStamp + 1000, ascend: 5, level: 9 }
 }
+
+// Check the actual production policy, including zero caps and PREV stage wiring.
+const policyFinder = new Current([], {})
+const configs = [undefined, ...[1, 2, 3].map(level =>
+    policyFinder.parameters.inheritedOutlierFilterStages.find(stage => stage.level === level).waveCountPenalty)]
+for(const [pCount, sCount, penalties] of [
+    [0, 0, [0, 0, 0, 0]], [4, 0, [0, 0, 0, 0]],
+    [4, 12, [0, 0, 0, 0]], [4, 13, [0.25, 0, 0, 0]],
+    [4, 14, [0.5, 0, 0, 0]], [4, 15, [0.75, 0.25, 0, 0]],
+    [4, 16, [1, 0.5, 0, 0]], [4, 17, [1, 0.5, 0, 0]],
+    [4, 18, [1, 0.5, 0, 0]], [4, 19, [1, 0.5, 0, 0]],
+    [4, 100, [1, 0.5, 0, 0]], [0, 100, [1, 0.5, 0, 0]]
+]) {
+    const results = [
+        ...Array.from({ length: pCount }, () => ({ wave: 'P', weight: 1 })),
+        ...Array.from({ length: sCount }, () => ({ wave: 'S', weight: 1 })),
+        { wave: 'P', weight: 0 }, { wave: 'S', weight: 0 }, { wave: 'O', weight: 1 }
+    ]
+    configs.forEach((config, level) => assert.equal(policyFinder.calcWaveCountPenalty(results, config), penalties[level]))
+}
+for(const pCount of [0, 5, 100]) {
+    const phaseMap = new Map()
+    const phasePicks = makeStations(100).map((station, index) => {
+        const wave = index < pCount ? 'P' : 'S'
+        const distance = calcDistanceKm([hypocenter.lat, hypocenter.lng], station.latLng)
+        const triggerStamp = stamp + calcReachTime(travelTimes.jma2001, wave === 'P', hypocenter.depth, distance) * 1000 + (index % 2 ? 100 : -100)
+        const pickId = `${station.id}:${triggerStamp}`
+        phaseMap.set(pickId, wave)
+        return { stationId: station.id, pickId, latLng: station.latLng, triggerStamp, maxAscend: 5, maxLevel: 9 }
+    }).sort((a, b) => a.triggerStamp - b.triggerStamp)
+    const results = policyFinder.calcPreviousWaveScenarioLikelihoods(phasePicks, hypocenter, pCount ? 'P' : 'S', new Map(), phaseMap)
+    assert.deepEqual(results.map(result => result.filterStageLevel), [3, 2, 1, 0])
+    for(const result of results) {
+        assert.equal(result.effectivePickCount, 100)
+        assert.equal(result.pickResults.filter(pick => pick.wave === 'P').length, pCount)
+        const penalty = pCount === 100 ? 0 : expectedCaps[result.filterStageLevel]
+        assert.equal(result.waveCountPenalty, penalty)
+        assert(result.rmse > 0, 'Disabling the phase-count penalty retains the arrival residual')
+        assert.equal(result.score, result.rmse + penalty, 'PREV uses its own cap, including zero')
+    }
+}
+assert.deepEqual(profile.parameters.defaultWaveCountPenaltyConfig, { thresholdRatio: 3, maxPenalty: 1 })
+console.log('PASS production phase thresholds/caps and pure S, S-heavy, pure P scoring at every PREV stage')
+
 const activeSnapshot = pick => ({ ...pick, id: pick.stationId, isActive: true })
 const adjacency = (stations, connected = () => true) => Object.fromEntries(stations.map(station => [station.id,
     stations.filter(neighbor => connected(station, neighbor)).map(neighbor => ({
         stationId: neighbor.id, distance: calcDistanceKm(station.latLng, neighbor.latLng)
     }))]))
 // Compare all enumerable state apart from the new configuration references and opaque caches.
+const withoutDormancy = ({ dormantSince, ...cluster }) => cluster
 const snapshot = finder => Object.fromEntries(Object.entries(finder)
-    .filter(([key, value]) => key !== 'profile' && key !== 'parameters' && key !== 'stationDistanceTable' && !(value instanceof WeakMap)))
+    .filter(([key, value]) => !['profile', 'parameters', 'stationDistanceTable', 'frameStamp', 'triggerStations'].includes(key) && !(value instanceof WeakMap))
+    .map(([key, value]) => [key, key === 'clusters' ? value.map(withoutDormancy)
+        : key === 'pickClusterMap' ? new Map([...value].map(([id, cluster]) => [id, withoutDormancy(cluster)])) : value]))
 // Keep the original density inputs and disable the breadth station bonus to isolate
-// solver equivalence. Both intentional policies are covered by palert_inference.mjs.
+// solver equivalence, also restoring the original phase caps for this comparison.
 const pair = adj => {
     const baseline = new Baseline([], adj)
-    const current = new Current([], adj, structuredClone(baseline.stationDensityWeights))
-    current.parameters = { ...current.parameters, penaltyBreadthKmPerStation: 0 }
+    const current = withBaselineWavePenalties(new Current([], adj, structuredClone(baseline.stationDensityWeights)))
+    current.parameters = { ...current.parameters, penaltyBreadthKmPerStation: 0,
+        clusterMatchResidualTieTolerance: baselineParameters.clusterMatchResidualTieTolerance }
+    // Isolate solver equivalence from the intentional association change, checked by cluster_matching.mjs.
+    Object.defineProperty(current, 'findBestMatchingCluster', { value: Baseline.prototype.findBestMatchingCluster })
     return { baseline, current }
 }
 let frames = 0
-const update = (finders, picks, active = picks.map(activeSnapshot), inactive = []) => {
-    const args = [picks, inactive, active]
+const update = (finders, picks, active = picks.map(activeSnapshot), inactive = [], frameStamp = null, compareState = true) => {
+    const args = [picks, inactive, active, frameStamp]
     const expected = finders.baseline.update(...structuredClone(args))
     const actual = finders.current.update(...structuredClone(args))
     equal(actual, expected, `Frame ${frames}: public results`)
-    equal(snapshot(finders.current), snapshot(finders.baseline), `Frame ${frames}: state and PREV results`)
+    if(compareState) equal(snapshot(finders.current), snapshot(finders.baseline), `Frame ${frames}: state and PREV results`)
     frames++
     return actual
 }
@@ -187,7 +252,11 @@ for(const center of [hypocenter, { lat: 38, lng: 142, depth: 150 }]) {
     assert(withDuplicates.some(result => result.pickResults.some(pick => pick.excludedReason === 'duplicate-phase')))
     // Repeated submissions update the existing pick instead of creating another identity.
     update(finders, [...picks, ...repeated])
-    update(finders, [], [], stations.map(station => ({ ...station, updateStamp: stamp + 120000 })))
+    const quiet = stations.map(station => ({ ...station, updateStamp: stamp + 120000 }))
+    update(finders, [], [], quiet, stamp + 120000, false)
+    assert(finders.current.clusters.every(cluster => cluster.dormantSince === stamp + 120000))
+    assert(finders.current.clusters.length > 0, 'Finished clusters retain their evidence for thirty seconds')
+    update(finders, [], [], quiet, stamp + 150001)
     assert.equal(finders.current.clusters.length, 0)
     assert.equal(finders.current.picks.size, 0)
     const nextPicks = stations.map(station => makePick(station, 'P', stamp + 180000, center))
@@ -234,13 +303,13 @@ const currentCluster = newFinder.createCluster([], null)
 for(let i = 0; i < 16; i++) {
     oldFinder.refreshClusterReportState(baselineCluster, hypocenter)
     newFinder.refreshClusterReportState(currentCluster, hypocenter)
-    equal(currentCluster, baselineCluster, 'Stable report counter')
+    equal(withoutDormancy(currentCluster), baselineCluster, 'Stable report counter')
 }
 assert.equal(currentCluster.stable, true)
 for(const next of [{ ...hypocenter, depth: 40 }, null]) {
     oldFinder.refreshClusterReportState(baselineCluster, next)
     newFinder.refreshClusterReportState(currentCluster, next)
-    equal(currentCluster, baselineCluster, 'Changed or invalid report resets stability')
+    equal(withoutDormancy(currentCluster), baselineCluster, 'Changed or invalid report resets stability')
 }
 
 // A separate profile can change policies without changing another finder or NIED defaults.
@@ -257,4 +326,4 @@ assert.equal(alternative.normalizeHypocenter({ lat: 35, lng: 139 }).depth, 25)
 assert.equal(alternative.getOptionCacheEntry(penaltyPicks[0], hypocenter, new Map()).travelTime, travelTimes.jb)
 assert.equal(alternative.update(mergePicks, [], mergePicks.map(activeSnapshot)).length, 0)
 assert.equal(newFinder.parameters.minInferenceStationCount, 5)
-console.log(`PASS ${frames} sequential frames and ${comparisons} exact comparisons with original density inputs and no breadth station bonus; profile isolation verified`)
+console.log(`PASS ${frames} sequential frames and ${comparisons} exact comparisons with original density inputs/phase caps and no breadth station bonus; profile isolation verified`)

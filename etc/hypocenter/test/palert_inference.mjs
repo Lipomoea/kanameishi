@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { originalPalertActivity } from './fixtures/palert_activity_before.mjs'
+import { verifyClusterDormancy } from './cluster_dormancy.mjs'
+import { verifyClusterMatching } from './cluster_matching.mjs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { SourceTextModule } from 'node:vm'
@@ -1019,10 +1021,10 @@ assert.equal(nied.parameters.penaltyReferenceQuantile, 0.9)
 assert.deepEqual(sharedParameters, Object.fromEntries(Object.entries(nied.parameters)
     .filter(([key]) => !['defaultWaveCountPenaltyConfig', 'inheritedOutlierFilterStages', 'penaltyFullWeight', 'penaltyReferenceQuantile'].includes(key))))
 const expectedPenaltyConfigs = [
-    { thresholdRatio: 8, maxPenalty: 2 },
-    { thresholdRatio: 9, maxPenalty: 1.5 },
-    { thresholdRatio: 10, maxPenalty: 1 },
-    { thresholdRatio: 11, maxPenalty: 0.5 }
+    { thresholdRatio: 8, maxPenalty: 1 },
+    { thresholdRatio: 9, maxPenalty: 0.5 },
+    { thresholdRatio: 10, maxPenalty: 0 },
+    { thresholdRatio: 11, maxPenalty: 0 }
 ]
 assert.equal(waveCountPenaltySlope, 0.5)
 assert.deepEqual(defaultWaveCountPenaltyConfig, expectedPenaltyConfigs[0])
@@ -1064,7 +1066,7 @@ for(const config of [undefined, ...inheritedOutlierFilterStages.map(stage => sta
     for(const [pCount, sCount, expected] of [
         [0, 0, 0], [2, 0, 0],
         [2, thresholdRatio * 2 - 1, 0], [2, thresholdRatio * 2, 0],
-        [2, thresholdRatio * 2 + 1, 0.25], [2, thresholdRatio * 2 + 2, 0.5],
+        [2, thresholdRatio * 2 + 1, Math.min(0.25, maxPenalty)], [2, thresholdRatio * 2 + 2, Math.min(0.5, maxPenalty)],
         [2, (thresholdRatio + maxPenalty * 2) * 2, maxPenalty],
         [2, 100, maxPenalty], [0, 100, maxPenalty]
     ]) {
@@ -1133,7 +1135,10 @@ assert.equal(finder.getPickWeight(stored), 3.6)
 assert.deepEqual(finder.getInactivePenaltyCandidates(penaltyContext), [quietSnapshot], 'A retained pick from an older event does not globally exclude a quiet station')
 assert.deepEqual(finder.getInactivePenaltyCandidates([pick]), [], 'A station does not penalize its own cluster')
 assert.deepEqual(finder.getInactivePenaltyCandidates([]), [], 'No cluster start means no penalty evidence')
-finder.update([], [quietSnapshot], [])
+finder.update([], [quietSnapshot], [], stamp + 12000)
+assert.equal(finder.clusters[0].dormantSince, stamp + 12000)
+assert.equal(finder.picks.size, 1)
+finder.update([], [quietSnapshot], [], stamp + 42001)
 assert.equal(finder.picks.size, 0)
 assert.deepEqual(finder.getInactivePenaltyCandidates(penaltyContext), [quietSnapshot], 'Old-pick cleanup does not change the boundary-based decision')
 
@@ -1354,6 +1359,9 @@ assert(finder.isPreferredEffectivePick(effective(12, 100, 'b'), effective(10, 0,
 assert(!finder.isPreferredEffectivePick(effective(12, 2000, 'b'), effective(10, 0, 'a')))
 console.log('PASS base weights, profile isolation, reference selection, second-peak invalidation and pick lifecycle')
 
+await verifyClusterDormancy({ FindNiedHypocenter, FindPalertHypocenter, load, read })
+await verifyClusterMatching({ FindNiedHypocenter, FindPalertHypocenter, load, read })
+
 const updateFor = pick => ({ pickCandidates: [pick], activeStations: [{ ...pick, id: pick.stationId }], inactiveStations: [] })
 const merged = mergePalertHypocenterUpdates(updateFor(pick), updateFor({ ...pick, updateStamp: stamp + 1000, secondMaxLevel: 10 }))
 assert.equal(merged.pickCandidates.length, 1)
@@ -1403,9 +1411,13 @@ assert(!workers[0].terminated)
 const resetMessage = workers[0].messages.find(message => message.type === 'reset')
 workers[0].onmessage({ data: { requestId: resetMessage.requestId, results: ['reset-ack'] } })
 assert(!received.some(result => result.includes('reset-ack')), 'Reset acknowledgement cannot replace a newer result')
-client.update({ pickCandidates: [], activeStations: [], inactiveStations: [] })
-assert(!workers[0].terminated, 'An inactive frame resets the finder without destroying its Worker')
-assert.equal(clearCount, 1)
+client.update({ pickCandidates: [], activeStations: [], inactiveStations: [], frameStamp: stamp + 30000 })
+assert(!workers[0].terminated, 'An inactive frame keeps the Worker and advances dormancy')
+assert.equal(clearCount, 0)
+workers[0].onmessage({ data: { requestId: workers[0].messages.at(-1).requestId, results: [] } })
+assert.equal(workers[0].messages.at(-1).type, 'update')
+assert.equal(workers[0].messages.at(-1).frameStamp, stamp + 30000)
+assert.equal(workers[0].messages.at(-1).activeStations.length, 0)
 client.terminate(); client.update(updateFor(newPick))
 assert(workers[0].terminated)
 assert.equal(workers.length, 2)
@@ -1432,21 +1444,26 @@ globalThis.__niedClientDeps = {
     console: { error: error => niedErrors.push(error) }
 }
 const niedClientSource = `import { mergeNiedHypocenterUpdates } from '@/features/stations/NiedHypocenterUpdates';
+import { createHypocenterTriggerSnapshots } from '@/features/stations/HypocenterTriggerSnapshots';
 const { Worker, renderInferredHypocenters, clearInferredHypocenters, console } = globalThis.__niedClientDeps;
+const stations = [];
 let hypocenterWorker = null, hypocenterRequestId = 0, inFlightHypocenterRequestId = null, pendingHypocenterUpdate = null;
 const adjStations4Hypo = {}, stationDistanceTable = { indexes: {}, rows: [] }, isNiedHypoInfEnabled = () => true;
 ${section(niedComponentSource, 'const getHypocenterWorker =', 'const getPickDisplayWave =')}
-export { updateInferredHypocentersInWorker as update, resetHypocenterWorker as reset, terminateHypocenterWorker as terminate };`
+export { stations, updateInferredHypocentersInWorker as update, resetHypocenterWorker as reset, terminateHypocenterWorker as terminate };`
 const niedClient = await load('src/components/components/test-nied-client.js', niedClientSource.replace('import.meta.url', JSON.stringify(new URL('../../../src/components/components/NiedNet.vue', import.meta.url).href)))
 const niedStation = { id: 0, latLng: [35, 139], triggerStamp: stamp, updateStamp: stamp, ascend: 3, level: 8, isActive: true }
-const sendNiedUpdate = station => niedClient.update([station], [station], new Set())
+niedClient.stations.push(niedStation, { ...niedStation, id: 1, ascend: 1, isActive: false })
+const sendNiedUpdate = station => niedClient.update([station], [station], new Set(), station.updateStamp)
 sendNiedUpdate(niedStation)
+assert.deepEqual(niedWorkers[0].messages[1].triggerStations.map(s => s.stationId), [0, 1], 'NIED forwards weak unactivated neighbor triggers')
 assert.deepEqual(niedWorkers[0].messages[0].stationDistanceTable, { indexes: {}, rows: [] })
 assert(!('stationDistanceTable' in niedWorkers[0].messages[1]), 'NIED sends the distance table only on initialization')
 sendNiedUpdate({ ...niedStation, ascend: 4, updateStamp: stamp + 1000 })
 assert.equal(niedWorkers[0].messages.length, 2, 'An in-flight NIED request retains subsequent updates')
 niedWorkers[0].onmessage({ data: { requestId: niedWorkers[0].messages[1].requestId, results: ['first'] } })
 assert.equal(niedWorkers[0].messages[2].pickCandidates[0].ascend, 4)
+assert.equal(niedWorkers[0].messages[2].frameStamp, stamp + 1000)
 const staleNiedRequest = niedWorkers[0].messages[2].requestId
 niedClient.reset()
 const niedResetMessage = niedWorkers[0].messages.at(-1)
@@ -1611,6 +1628,7 @@ assert.equal(frameUpdates.length, 0, 'Enabling inference waits for a new frame')
 frameLoop.commitFrame(stamp + 1000, { A: 8, B: 8 }, null, 0)
 assert.equal(frameUpdates.length, 1)
 assert.equal(frameUpdates[0].pickCandidates.length, 2)
+assert.equal(frameUpdates[0].frameStamp, stamp + 1000, 'The data frame timestamp is distinct from its backdated pick onset')
 assert(frameUpdates[0].pickCandidates.every(pick => pick.triggerStamp === stamp))
 for(const station of Object.values(frameStations)) {
     clearTimeout(station.activeTimer)
@@ -1730,7 +1748,7 @@ console.log('PASS four-station activation minimum, nearest-first supplements, in
 
 // Run NIED's actual initialization code with sparse and dense directions.
 const buildNiedAdjacency = new Function('stationList', 'calcDistanceKm', 'calcBearingDeg', `
-    const adjStationIds = {}, adjStations4Hypo = {}, expireSeconds = {}, triggerDiffToleranceMatrix = [];
+    const adjStationIds = {}, adjStations4Hypo = {}, triggerDiffToleranceMatrix = [];
     let stationDistanceTable = null;
     ${section(niedComponentSource, 'const triggerCompatibilityConfig =', 'const triggerDiffToleranceMatrix =')}
     ${section(niedComponentSource, 'const bearingDirections =', 'let decimal =')}
@@ -1932,6 +1950,7 @@ const replayDistanceTable = {
 const replayFinder = new FindPalertHypocenter([], adjacency, null, replayDistanceTable)
 let bestResult = null
 let frameAtFullNetwork = null
+let finalDormantStamp = null
 for(let frame = 0; frame < 125; frame++) {
     const timestamp = stamp + frame * 1000
     for(const station of stations) {
@@ -1940,8 +1959,13 @@ for(let frame = 0; frame < 125; frame++) {
         station.update({ timestamp, pga, pgv: null, level: getPalertLevelFromPgaPgv(pga, null) }, 0, false)
         station.isActive = elapsed >= 0 && elapsed < 35
     }
-    const update = createPalertHypocenterUpdate(stations)
-    const results = replayFinder.update(update.pickCandidates, update.inactiveStations, update.activeStations)
+    const update = createPalertHypocenterUpdate(stations, timestamp)
+    const results = replayFinder.update(update.pickCandidates, update.inactiveStations, update.activeStations, update.frameStamp, update.triggerStations)
+    for(const cluster of replayFinder.clusters.filter(cluster => cluster.dormantSince !== null)) {
+        finalDormantStamp = Math.max(finalDormantStamp ?? cluster.dormantSince, cluster.dormantSince)
+        assert(replayFinder.picks.size > 0, 'The completed event retains evidence during dormancy')
+        assert(!results.some(result => result.clusterId === cluster.id), 'Dormant results are hidden')
+    }
     const result = results.find(result => result.effectiveStationCount >= 15)
     if(result && (!bestResult || result.score < bestResult.score)) bestResult = result
     if(!frameAtFullNetwork && update.pickCandidates.length === stations.length) frameAtFullNetwork = update
@@ -1961,6 +1985,10 @@ for(const result of bestResult.pickResults.filter(result => result.weight > 0)) 
     ) * 1000
     assert(Math.abs(predictedArrival - arrivals.get(result.pick.stationId)) < 1000, 'Effective picks must fit observed arrivals within one sample')
 }
+assert(Number.isFinite(finalDormantStamp), 'The event must enter dormancy before expiry')
+assert(replayFinder.frameStamp - finalDormantStamp > 30000)
+assert.equal(replayFinder.getResults().length, 0)
+assert.equal(replayFinder.clusters.length, 0, 'Thirty-second dormancy expires during the replay window')
 assert.equal(replayFinder.picks.size, 0)
 console.log(`PASS 125-frame synthetic Taiwan replay: ${bestResult.effectiveStationCount} stations, epicenter error ${distanceError.toFixed(2)} km, origin error ${Math.round(bestResult.originStamp - origin)} ms; event cleaned up`)
 

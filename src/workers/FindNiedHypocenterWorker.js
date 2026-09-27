@@ -49,16 +49,19 @@ const processPendingUpdate = scheduledVersion => {
 
     const {
         requestId,
+        frameStamp,
+        triggerStations,
         pickCandidates = [],
         activeStations = [],
         inactiveStations = []
     } = message
 
-    if(!finder) {
+    if(!finder && (activeStations.length > 0 || pickCandidates.length > 0)) {
         finder = new FindNiedHypocenter(inactiveStations, adjStations, stationDensityWeights, stationDistanceTable)
     }
 
-    const results = finder.update(pickCandidates, inactiveStations, activeStations)
+    const results = finder?.update(pickCandidates, inactiveStations, activeStations, frameStamp, triggerStations) ?? []
+    if(activeStations.length === 0 && finder?.clusters.length === 0) finder = null
     if(scheduledVersion !== workerVersion) return
     self.postMessage({ requestId, results })
 
