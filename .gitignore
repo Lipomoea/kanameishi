@@ -31,3 +31,6 @@ coverage
 
 # dist zip file
 dist.zip
+
+# Local hypocenter tests and records
+/etc/hypocenter/test/
