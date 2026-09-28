@@ -1,6 +1,15 @@
 import { calcDistanceKm, calcLngDiff, calcReachTime, compareFloat, exactRound } from '@/utils/Utils'
 
 const sortedInactiveStationsCacheKey = Symbol('sortedInactiveStations')
+const searchContextCacheKey = Symbol('searchContext')
+const searchGeometryCacheKey = Symbol('searchGeometry')
+const searchTravelCacheKey = Symbol('searchTravel')
+const pickWeightsCacheKey = Symbol('pickWeights')
+const originSumsCacheKey = Symbol('originSums')
+// Preserve exact coordinates (including signed zero); never round cache keys.
+const coordinateKey = value => Object.is(value, -0) ? '-0' : String(value)
+const epicenterKey = hypocenter => `${coordinateKey(hypocenter.lat)}:${coordinateKey(hypocenter.lng)}`
+const hypocenterKey = hypocenter => `${epicenterKey(hypocenter)}:${coordinateKey(hypocenter.depth)}`
 const clusterDormancyDuration = 30000
 const compareStrings = (value1, value2) => {
     const string1 = String(value1)
@@ -430,7 +439,7 @@ export class FindHypocenter {
             }
             const initialHypocenter = cluster.initialHypocenter || cluster.result?.hypocenter || null
             const previousWaveMaps = this.createPreviousWaveMaps(cluster.previousResults)
-            const result = this.findBestHypocenterWithEffectivePicks(cluster.picks, initialHypocenter, previousWaveMaps)
+            const result = this.findBestHypocenterWithEffectivePicks(cluster.picks, initialHypocenter, previousWaveMaps, cluster.previousResults)
             // this.logNewScenarioPicks(result, previousWaveMaps)
             // this.logNextPreviousResults(result.previousResults)
             cluster.previousResults = this.mergeValidPreviousResults(cluster.previousResults, result.previousResults)
@@ -441,15 +450,111 @@ export class FindHypocenter {
         })
     }
 
-    // Classify every pick, cap each station-phase group, then refit without duplicate picks.
-    findBestHypocenterWithEffectivePicks(picks, initialHypocenter, previousWaveMaps) {
+    findBestHypocenterWithEffectivePicks(picks, initialHypocenter, previousWaveMaps, previousResults = null) {
         const penaltyContext = this.createInactivePenaltyContext(picks)
+        return this.findIndependentHypocenters(picks, initialHypocenter, previousWaveMaps, penaltyContext, previousResults, true)
+    }
+
+    findIndependentHypocenters(picks, initialHypocenter, previousWaveMaps, penaltyContext, previousResults = null, refit = false) {
+        if(!Array.isArray(picks) || picks.length === 0) {
+            return this.createHypocenterResult(null, this.createInvalidLikelihood(null))
+        }
+        const searchContext = this.createSearchContext()
+        const nextPreviousResults = {}
+        for(const firstWave of ['P', 'S']) {
+            const previous = previousResults?.[firstWave]
+            const branchInitial = Number.isFinite(previous?.score) && previous.hypocenter
+                ? previous.hypocenter : initialHypocenter
+            const previousWaveMap = previousWaveMaps?.[firstWave]
+            let best = null
+            for(const scenario of this.createScenarioSearches(picks, firstWave, previousWaveMap, searchContext)) {
+                const result = refit
+                    ? this.findBestScenarioWithEffectivePicks(picks, branchInitial, previousWaveMap, penaltyContext, scenario, searchContext)
+                    : this.findBestScenarioHypocenter(picks, branchInitial, previousWaveMap, penaltyContext, scenario, searchContext)
+                // Apply S/P only after this hypothesis's search and any duplicate refit.
+                const finalResult = this.finalizeScenarioResult(result)
+                if(!best || finalResult.score < best.score) best = finalResult
+            }
+            nextPreviousResults[firstWave] = best
+        }
+        const result = Object.values(nextPreviousResults).reduce((best, item) => item.score < best.score ? item : best)
+        return { ...result, previousResults: nextPreviousResults }
+    }
+
+    createSearchContext() {
+        // Owned by one synchronous inference: no picks, histories or geometry survive a frame.
+        return { inputs: new WeakMap(), sourceKeys: new WeakMap(), epicenters: new Map(), hypocenters: new Map() }
+    }
+
+    setBoundedCacheEntry(cache, key, value, limit) {
+        if(cache.size >= limit) cache.delete(cache.keys().next().value)
+        cache.set(key, value)
+        return value
+    }
+
+    prepareScenarioInput(picks, searchContext) {
+        let input = searchContext?.inputs.get(picks)
+        if(input) return input
+        const triggerRankWeights = this.calcTriggerRankWeights(picks)
+        triggerRankWeights[pickWeightsCacheKey] = new Map(picks.map(pick => [
+            pick, this.getPickWeight(pick, triggerRankWeights.get(pick.pickId) ?? 1)
+        ]))
+        const anchorIndexes = this.getScenarioAnchorIndexes(picks, triggerRankWeights)
+        input = {
+            triggerRankWeights,
+            anchorIndexes,
+            validTriggers: picks.every(pick => this.hasValidTriggerStamp(pick)),
+            weightedPickCount: this.calcWeightedPickCount(picks, triggerRankWeights),
+            inferenceIndexes: this.createScenarioInferenceIndexes(picks),
+            greedyInferenceIndexes: anchorIndexes ? this.createScenarioInferenceIndexes(picks,
+                anchorIndexes.firstAnchorIndex, anchorIndexes.lastAnchorIndex) : [],
+            inheritedIndexes: new WeakMap()
+        }
+        searchContext?.inputs.set(picks, input)
+        return input
+    }
+
+    getInheritedPickIndexes(picks, previousWaveMap, input) {
+        let indexes = input.inheritedIndexes.get(previousWaveMap)
+        if(!indexes) {
+            indexes = input.inferenceIndexes.filter(index =>
+                ['P', 'S'].includes(previousWaveMap.get(picks[index].pickId)) &&
+                !(this.getScenarioPickWeight(picks[index], input.triggerRankWeights) <= 0))
+            input.inheritedIndexes.set(previousWaveMap, indexes)
+        }
+        return indexes
+    }
+
+    getScenarioPickWeight(pick, triggerRankWeights) {
+        return triggerRankWeights[pickWeightsCacheKey]?.get(pick) ??
+            this.getPickWeight(pick, triggerRankWeights.get(pick.pickId) ?? 1)
+    }
+
+    createScenarioSearches(picks, firstWave, previousWaveMap, searchContext) {
+        const scenarios = ['P', 'S'].map(lastWave => ({ firstWave, lastWave, scenario: `${firstWave}${lastWave}` }))
+        if(!previousWaveMap?.size) return scenarios
+        const input = this.prepareScenarioInput(picks, searchContext)
+        const inheritedCount = this.getInheritedPickIndexes(picks, previousWaveMap, input)
+            .filter(index => this.getScenarioPickWeight(picks[index], input.triggerRankWeights) > 0).length
+        if(inheritedCount === 0) return scenarios
+        // Each path keeps its filter level; residual and retention gates still apply at every position.
+        for(const stage of this.parameters.inheritedOutlierFilterStages) {
+            if(inheritedCount >= stage.minCount) scenarios.push({ firstWave, scenario: `${firstWave}_PREV`, filterStageLevel: stage.level })
+        }
+        scenarios.push({ firstWave, scenario: `${firstWave}_PREV`, filterStageLevel: 0 })
+        return scenarios
+    }
+
+    // Duplicate choices and refitting belong to one hypothesis, never to another path.
+    findBestScenarioWithEffectivePicks(picks, initialHypocenter, previousWaveMap, penaltyContext, scenario, searchContext = this.createSearchContext()) {
         // this.logInferenceRound(1, picks)
-        const classificationResult = this.findBestHypocenter(
+        const classificationResult = this.findBestScenarioHypocenter(
             picks,
             initialHypocenter,
-            previousWaveMaps,
-            penaltyContext
+            previousWaveMap,
+            penaltyContext,
+            scenario,
+            searchContext
         )
         const inferenceFilterStageLevels = [classificationResult.filterStageLevel ?? 0]
         const weightedPhasePickIds = this.getWeightedPhasePickIds(classificationResult)
@@ -471,11 +576,13 @@ export class FindHypocenter {
         }
         const refitPicks = picks.filter(pick => !duplicatePickIds.has(pick.pickId))
         // this.logInferenceRound(2, refitPicks)
-        const finalResult = this.findBestHypocenter(
+        const finalResult = this.findBestScenarioHypocenter(
             refitPicks,
             classificationResult?.hypocenter || initialHypocenter,
-            previousWaveMaps,
-            penaltyContext
+            previousWaveMap,
+            penaltyContext,
+            scenario,
+            searchContext
         )
         inferenceFilterStageLevels.push(finalResult.filterStageLevel ?? 0)
         if(!Number.isFinite(finalResult.score)) {
@@ -497,7 +604,7 @@ export class FindHypocenter {
                 inferenceFilterStageLevels
             },
             finalPickResults,
-            picks.length
+            penaltyContext
         )
     }
 
@@ -616,6 +723,12 @@ export class FindHypocenter {
     }
 
     createInactivePenaltyContext(picks) {
+        // Freeze full-input weights before exclusion; duplicate refits keep the same denominator.
+        const triggerRankWeights = this.calcTriggerRankWeights(picks || [])
+        const unexplainedPickWeights = new Map((picks || []).map(pick => [
+            pick.pickId, this.getPickWeight(pick, triggerRankWeights.get(pick.pickId) ?? 1)
+        ]))
+        const unexplainedPickWeightSum = [...unexplainedPickWeights.values()].reduce((sum, weight) => sum + weight, 0)
         const stations = [...new Map((picks || []).map(pick => [pick.stationId, pick])).values()]
         const stationCount = stations.length
         let penaltyWeightStationCount = stationCount
@@ -639,7 +752,9 @@ export class FindHypocenter {
         return {
             picks,
             stationCount,
-            inactivePenaltyWeight: this.calcInactivePenaltyWeight(penaltyWeightStationCount)
+            inactivePenaltyWeight: this.calcInactivePenaltyWeight(penaltyWeightStationCount),
+            unexplainedPickWeights,
+            unexplainedPickWeightSum
         }
     }
 
@@ -844,7 +959,9 @@ export class FindHypocenter {
             )
         }
         // console.log(this.updateVersion, hypocenter, firstWave, results)
-        return results.reduce((best, result) => result.score < best.score ? result : best)
+        // Fixed-position diagnostics compare finalized results; search evaluates a single scenario.
+        return results.map(result => this.finalizeScenarioResult(result))
+            .reduce((best, result) => result.score < best.score ? result : best)
     }
 
     mergeValidPreviousResults(previousResults, nextPreviousResults) {
@@ -857,43 +974,57 @@ export class FindHypocenter {
         }))
     }
 
-    findBestHypocenter(picks, initialHypocenter = null, previousWaveMaps = null, penaltyContext = this.createInactivePenaltyContext(picks)) {
-        if(!Array.isArray(picks) || picks.length === 0) {
-            return this.createHypocenterResult(null, this.createInvalidLikelihood(null))
-        }
+    findBestHypocenter(picks, initialHypocenter = null, previousWaveMaps = null, penaltyContext = this.createInactivePenaltyContext(picks), previousResults = null) {
+        return this.findIndependentHypocenters(picks, initialHypocenter, previousWaveMaps, penaltyContext, previousResults)
+    }
 
+    findBestScenarioHypocenter(picks, initialHypocenter, previousWaveMap, penaltyContext, scenario, searchContext = this.createSearchContext()) {
+        if(!Array.isArray(picks) || picks.length === 0) {
+            return this.createHypocenterResult(null, this.createInvalidLikelihood(scenario.firstWave, scenario.lastWave, scenario.scenario))
+        }
+        // Full results belong only to this path/input. A duplicate refit gets a fresh cache.
+        const results = new Map()
+        const evaluate = hypocenter => {
+            const key = hypocenterKey(this.normalizeHypocenter(hypocenter))
+            if(results.has(key)) return results.get(key)
+            return this.setBoundedCacheEntry(results, key, this.evaluateScenarioHypocenter(
+                picks, hypocenter, previousWaveMap, penaltyContext, scenario, searchContext), 32)
+        }
         const { lat, lng } = this.calcInitialHypocenterLatLng(picks)
-        let currentResult = this.evaluateHypocenter(
-            picks,
-            initialHypocenter || { lat, lng, depth: this.parameters.initialDepth },
-            previousWaveMaps,
-            penaltyContext
-        )
+        let currentResult = evaluate(initialHypocenter || { lat, lng, depth: this.parameters.initialDepth })
         let stepIndex = 0
         let iteration = 0
         while(stepIndex < this.parameters.hypocenterSearchSteps.length && iteration < this.parameters.maxHypocenterSearchIterations) {
             iteration++
             const { degree, depth } = this.parameters.hypocenterSearchSteps[stepIndex]
             const candidates = this.createNeighborHypocenters(currentResult.hypocenter, degree, depth)
-                .map(hypocenter => this.evaluateHypocenter(
-                    picks,
-                    hypocenter,
-                    previousWaveMaps,
-                    penaltyContext
-                ))
+                .map(evaluate)
             const bestCandidate = candidates.reduce(
-                (best, candidate) => candidate.score < best.score ? candidate : best,
+                (best, candidate) => candidate.searchScore < best.searchScore ? candidate : best,
                 currentResult
             )
-            if(bestCandidate.score < currentResult.score) {
+            if(bestCandidate.searchScore < currentResult.searchScore) {
                 currentResult = bestCandidate
             }
             else {
                 stepIndex++
             }
         }
-        // this.logFinalScenarioRmses(picks, currentResult.hypocenter, previousWaveMaps, penaltyContext)
         return currentResult
+    }
+
+    evaluateScenarioHypocenter(picks, hypocenter, previousWaveMap, penaltyContext, scenario, searchContext) {
+        const normalizedHypocenter = this.normalizeHypocenter(hypocenter)
+        const optionCache = new Map()
+        if(searchContext) optionCache.set(searchContextCacheKey, searchContext)
+        const likelihood = scenario.lastWave
+            ? this.calcScenarioLikelihood(picks, normalizedHypocenter, scenario.firstWave, scenario.lastWave, optionCache, penaltyContext)
+            : this.calcPreviousWaveScenarioLikelihoods(picks, normalizedHypocenter, scenario.firstWave, optionCache,
+                previousWaveMap, penaltyContext, scenario.filterStageLevel)[0]
+        return this.createHypocenterResult(normalizedHypocenter, likelihood || {
+            ...this.createInvalidLikelihood(scenario.firstWave, scenario.lastWave, scenario.scenario),
+            filterStageLevel: scenario.filterStageLevel
+        })
     }
 
     logFinalScenarioRmses(picks, hypocenter, previousWaveMaps = null, penaltyContext = this.createInactivePenaltyContext(picks)) {
@@ -908,7 +1039,7 @@ export class FindHypocenter {
                     optionCache,
                     penaltyContext
                 )
-                return { key: result.scenario || key, result }
+                return { key: result.scenario || key, result: this.finalizeScenarioResult(result) }
             }))
         const previousScenarioResults = ['P', 'S']
             .flatMap(firstWave => {
@@ -923,7 +1054,7 @@ export class FindHypocenter {
                     penaltyContext
                 ).map(result => ({
                     key: `${result.scenario || `${firstWave}_PREV`}_${result.filterStageLevel ?? 0}`,
-                    result
+                    result: this.finalizeScenarioResult(result)
                 }))
             })
         const scenarioResults = [...greedyScenarioResults, ...previousScenarioResults]
@@ -965,7 +1096,8 @@ export class FindHypocenter {
         if(!Array.isArray(picks) || picks.length === 0) {
             return this.createInvalidLikelihood(firstWave, lastWave)
         }
-        if(!picks.every(pick => this.hasValidTriggerStamp(pick))) {
+        const input = this.prepareScenarioInput(picks, optionCache?.get(searchContextCacheKey))
+        if(!input.validTriggers) {
             return this.createInvalidLikelihood(firstWave, lastWave)
         }
 
@@ -975,20 +1107,20 @@ export class FindHypocenter {
             firstWave,
             lastWave,
             optionCache,
-            penaltyContext
+            penaltyContext,
+            input
         )
     }
 
-    calcGreedyScenarioLikelihood(picks, hypocenter, firstWave, lastWave, optionCache, penaltyContext = this.createInactivePenaltyContext(picks)) {
+    calcGreedyScenarioLikelihood(picks, hypocenter, firstWave, lastWave, optionCache, penaltyContext = this.createInactivePenaltyContext(picks), input = this.prepareScenarioInput(picks, optionCache?.get(searchContextCacheKey))) {
         const pickResults = new Array(picks.length)
-        const originEntries = []
-        const triggerRankWeights = this.calcTriggerRankWeights(picks)
-        const anchorIndexes = this.getScenarioAnchorIndexes(picks, triggerRankWeights)
+        const originEntries = this.createOriginEntries()
+        const { triggerRankWeights, anchorIndexes } = input
         if(!anchorIndexes) return this.createInvalidLikelihood(firstWave, lastWave)
         const { firstAnchorIndex, lastAnchorIndex } = anchorIndexes
         pickResults[firstAnchorIndex] = this.addScenarioPickResult(picks[firstAnchorIndex], hypocenter, firstWave, optionCache, triggerRankWeights, null, originEntries)
         pickResults[lastAnchorIndex] = this.addScenarioPickResult(picks[lastAnchorIndex], hypocenter, lastWave, optionCache, triggerRankWeights, null, originEntries)
-        for(const i of this.createScenarioInferenceIndexes(picks, firstAnchorIndex, lastAnchorIndex)) {
+        for(const i of input.greedyInferenceIndexes) {
             const pick = picks[i]
             const options = this.calcPickOriginOptions(pick, hypocenter, optionCache)
             const wave = this.selectScenarioWave(pick, options, originEntries, triggerRankWeights)
@@ -1007,20 +1139,20 @@ export class FindHypocenter {
         )
     }
 
-    calcPreviousWaveScenarioLikelihoods(picks, hypocenter, firstWave, optionCache, previousWaveMap, penaltyContext = this.createInactivePenaltyContext(picks)) {
-        const triggerRankWeights = this.calcTriggerRankWeights(picks)
-        const weightedPickCount = this.calcWeightedPickCount(picks, triggerRankWeights)
+    calcPreviousWaveScenarioLikelihoods(picks, hypocenter, firstWave, optionCache, previousWaveMap, penaltyContext = this.createInactivePenaltyContext(picks), filterStageLevel = null) {
+        const input = this.prepareScenarioInput(picks, optionCache?.get(searchContextCacheKey))
+        const { triggerRankWeights, weightedPickCount } = input
         const inheritedItems = []
-        for(const i of this.createScenarioInferenceIndexes(picks)) {
+        for(const i of this.getInheritedPickIndexes(picks, previousWaveMap, input)) {
             const pick = picks[i]
             const previousWave = previousWaveMap.get(pick.pickId)
             const item = this.createInheritedScenarioPickItem(i, pick, hypocenter, previousWave, optionCache, triggerRankWeights)
             if(item) inheritedItems.push(item)
         }
-        return this.calcInheritedOutlierFilterResults(inheritedItems, weightedPickCount)
+        return this.calcInheritedOutlierFilterResults(inheritedItems, weightedPickCount, filterStageLevel)
             .map(({ outlierIndexes, filterStage }) => {
                 const pickResults = new Array(picks.length)
-                const originEntries = []
+                const originEntries = this.createOriginEntries()
                 inheritedItems.forEach(item => {
                     if(outlierIndexes.has(item.index)) return
                     pickResults[item.index] = this.addScenarioPickResult(
@@ -1037,7 +1169,7 @@ export class FindHypocenter {
                 if(this.calcWeightSum(originEntries) <= 0) {
                     return this.createInvalidLikelihood(firstWave, null, `${firstWave}_PREV`)
                 }
-                for(const i of this.createScenarioInferenceIndexes(picks)) {
+                for(const i of input.inferenceIndexes) {
                     if(pickResults[i]) continue
                     const pick = picks[i]
                     const options = this.calcPickOriginOptions(pick, hypocenter, optionCache)
@@ -1112,14 +1244,18 @@ export class FindHypocenter {
         )
         return candidateIndexes.find(index =>
             !usedIndexes.has(index) &&
-            this.getPickWeight(picks[index], triggerRankWeights.get(picks[index].pickId) ?? 1) > 0
+            this.getScenarioPickWeight(picks[index], triggerRankWeights) > 0
         ) ?? null
     }
 
     createScenarioAnchorCandidateIndexes(pickCount, preferredIndex, centerIndex, centerDirection) {
         const indexes = []
+        const seen = new Set()
         const addIndex = index => {
-            if(index >= 0 && index < pickCount && !indexes.includes(index)) indexes.push(index)
+            if(index >= 0 && index < pickCount && !seen.has(index)) {
+                seen.add(index)
+                indexes.push(index)
+            }
         }
         const centerStep = centerDirection > 0 ? 1 : -1
         for(let index = preferredIndex; centerDirection > 0 ? index <= centerIndex : index >= centerIndex; index += centerStep) {
@@ -1135,8 +1271,7 @@ export class FindHypocenter {
     createInheritedScenarioPickItem(index, pick, hypocenter, wave, optionCache, triggerRankWeights) {
         if(wave !== 'P' && wave !== 'S') return null
         const options = this.calcPickOriginOptions(pick, hypocenter, optionCache)
-        const triggerRankWeight = triggerRankWeights.get(pick.pickId) ?? 1
-        const weight = this.getPickWeight(pick, triggerRankWeight)
+        const weight = this.getScenarioPickWeight(pick, triggerRankWeights)
         if(weight <= 0) return null
         return {
             index,
@@ -1149,15 +1284,17 @@ export class FindHypocenter {
 
     calcWeightedPickCount(picks, triggerRankWeights) {
         return picks.filter(pick =>
-            this.getPickWeight(pick, triggerRankWeights.get(pick.pickId) ?? 1) > 0
+            this.getScenarioPickWeight(pick, triggerRankWeights) > 0
         ).length
     }
 
-    calcInheritedOutlierFilterResults(inheritedItems, weightedPickCount) {
+    calcInheritedOutlierFilterResults(inheritedItems, weightedPickCount, filterStageLevel = null) {
         const noFilterResult = { outlierIndexes: new Set(), filterStage: null }
+        if(filterStageLevel === 0) return [noFilterResult]
+        const fallbackResults = filterStageLevel === null ? [noFilterResult] : []
         const stages = this.parameters.inheritedOutlierFilterStages
-            .filter(stage => inheritedItems.length >= stage.minCount)
-        if(stages.length === 0) return [noFilterResult]
+            .filter(stage => (filterStageLevel === null || stage.level === filterStageLevel) && inheritedItems.length >= stage.minCount)
+        if(stages.length === 0) return fallbackResults
         const originEntries = inheritedItems.map(item => ({
             value: item.originStamp,
             weight: item.weight
@@ -1165,13 +1302,13 @@ export class FindHypocenter {
         const originStamp = this.calcWeightedMean(originEntries)
         const meanResidual = this.calcMeanAbsResidual(originEntries, originStamp)
         if(!Number.isFinite(meanResidual) || meanResidual <= 0) {
-            return [noFilterResult]
+            return fallbackResults
         }
         const filterResults = stages.map(stage => {
             if(Number.isFinite(stage.maxMeanResidual) && meanResidual > stage.maxMeanResidual) return null
             const threshold = Math.max(meanResidual * stage.ratio, stage.minResidual)
             const outlierIndexes = new Set(inheritedItems
-                .filter(item => item.index > 0 && Math.abs(item.originStamp - originStamp) > threshold)
+                .filter(item => Math.abs(item.originStamp - originStamp) > threshold)
                 .map(item => item.index)
             )
             const remainingInheritedPickCount = inheritedItems.length - outlierIndexes.size
@@ -1180,7 +1317,7 @@ export class FindHypocenter {
                 remainingInheritedPickCount >= weightedPickCount * stage.minRemainingInheritedRatio
             ) ? { outlierIndexes, filterStage: stage } : null
         }).filter(Boolean)
-        return [...filterResults, noFilterResult]
+        return [...filterResults, ...fallbackResults]
     }
 
     createScenarioLikelihoodResult(picks, hypocenter, firstWave, lastWave, scenario, optionCache, pickResults, originEntries, penaltyContext = this.createInactivePenaltyContext(picks), filterStage = null) {
@@ -1196,38 +1333,36 @@ export class FindHypocenter {
             penaltyContext.stationCount
         )
         const inactivePenaltyWeight = penaltyContext.inactivePenaltyWeight
-        const waveCountPenalty = this.calcWaveCountPenalty(
-            pickResults,
-            filterStage?.waveCountPenalty ?? this.parameters.defaultWaveCountPenaltyConfig
-        )
         return this.createLikelihoodResultWithPickMetrics({
             rmse,
             inactivePenalty,
             inactivePenaltyWeight,
-            waveCountPenalty,
+            waveCountPenalty: 0,
             originStamp,
             firstWave,
             lastWave,
             scenario,
             filterStageLevel: filterStage?.level ?? 0
-        }, pickResults, penaltyContext.picks.length)
+        }, pickResults, penaltyContext)
     }
 
-    createLikelihoodResultWithPickMetrics(result, pickResults, totalPickCount) {
+    createLikelihoodResultWithPickMetrics(result, pickResults, penaltyContext) {
         const effectivePickCount = this.calcEffectivePickCount(pickResults)
         const effectiveStationCount = this.calcEffectiveStationCount(pickResults)
         const unexplainedPickPenalty = this.calcUnexplainedPickPenalty(
             pickResults,
-            totalPickCount
+            penaltyContext,
+            result.originStamp
         )
-        const score = result.rmse +
+        const searchScore = result.rmse +
             result.inactivePenalty * result.inactivePenaltyWeight +
-            result.waveCountPenalty +
             unexplainedPickPenalty
+        const score = searchScore + result.waveCountPenalty
         const effectiveCount = (effectivePickCount + effectiveStationCount) / 2
         const qualityScore = this.calcQualityScore(score, effectiveCount)
         return {
             ...result,
+            searchScore,
             score,
             unexplainedPickPenalty,
             effectivePickCount,
@@ -1236,6 +1371,17 @@ export class FindHypocenter {
             qualityRank: this.calcQualityRank(qualityScore, effectiveCount),
             pickResults
         }
+    }
+
+    finalizeScenarioResult(result) {
+        if(!Number.isFinite(result?.score)) return result
+        const filterStage = this.parameters.inheritedOutlierFilterStages.find(stage => stage.level === result.filterStageLevel)
+        const waveCountPenalty = this.calcWaveCountPenalty(result.pickResults,
+            filterStage?.waveCountPenalty ?? this.parameters.defaultWaveCountPenaltyConfig)
+        const score = result.searchScore + waveCountPenalty
+        const effectiveCount = (result.effectivePickCount + result.effectiveStationCount) / 2
+        const qualityScore = this.calcQualityScore(score, effectiveCount)
+        return { ...result, waveCountPenalty, score, qualityScore, qualityRank: this.calcQualityRank(qualityScore, effectiveCount) }
     }
 
     calcEffectivePickCount(pickResults) {
@@ -1280,23 +1426,18 @@ export class FindHypocenter {
         return Math.min(Math.max(penalty, 0), config.maxPenalty)
     }
 
-    calcUnexplainedPickPenalty(pickResults, totalPickCount = pickResults.length) {
-        const explainedStationWaves = new Set()
-        const unexplainedPickCount = pickResults.reduce((count, result) => {
-            if(result.wave === 'O' || result.excludedReason === 'duplicate-phase') return count + 1
-            if(result.weight <= 0 || (result.wave !== 'P' && result.wave !== 'S')) return count
-            const stationWave = `${result.pick?.stationId}:${result.wave}`
-            if(explainedStationWaves.has(stationWave)) return count + 1
-            explainedStationWaves.add(stationWave)
-            return count
-        }, 0)
-        const denominator = Math.max(totalPickCount, this.parameters.minUnexplainedPickPenaltyDenominator)
-        return unexplainedPickCount / denominator * this.parameters.unexplainedPickPenaltyWeight
+    calcUnexplainedPickPenalty(pickResults, penaltyContext, originStamp) {
+        penaltyContext ??= this.createInactivePenaltyContext(pickResults.map(result => result.pick))
+        const totalWeight = penaltyContext.unexplainedPickWeightSum
+        if(totalWeight <= 0) return 0
+        const explainedPickIds = this.selectEffectivePickIds({ pickResults, originStamp })
+        let explainedWeight = 0
+        for(const pickId of explainedPickIds) explainedWeight += penaltyContext.unexplainedPickWeights.get(pickId) ?? 0
+        return Math.max(0, totalWeight - explainedWeight) / totalWeight * this.parameters.unexplainedPickPenaltyWeight
     }
 
     selectScenarioWave(pick, options, originEntries, triggerRankWeights, outlierFilterStage) {
-        const triggerRankWeight = triggerRankWeights.get(pick.pickId) ?? 1
-        if(this.getPickWeight(pick, triggerRankWeight) <= 0) return 'L'
+        if(this.getScenarioPickWeight(pick, triggerRankWeights) <= 0) return 'L'
         const selected = this.selectClosestOption(options, originEntries, outlierFilterStage)
         return selected?.wave ?? 'O'
     }
@@ -1304,7 +1445,7 @@ export class FindHypocenter {
     addScenarioPickResult(pick, hypocenter, wave, optionCache, triggerRankWeights, pickResults, originEntries, options = null) {
         options ??= this.calcPickOriginOptions(pick, hypocenter, optionCache)
         const triggerRankWeight = triggerRankWeights.get(pick.pickId) ?? 1
-        const weight = this.getPickWeight(pick, triggerRankWeight)
+        const weight = this.getScenarioPickWeight(pick, triggerRankWeights)
         if(weight <= 0 || wave === 'L' || wave === 'O') {
             const pickResult = {
                 pick: this.createPickResultSnapshot(pick),
@@ -1331,7 +1472,7 @@ export class FindHypocenter {
             weight
         }
         pickResults?.push(pickResult)
-        originEntries.push({
+        this.appendOriginEntry(originEntries, {
             value: selected.originStamp,
             weight
         })
@@ -1380,17 +1521,31 @@ export class FindHypocenter {
         if(penaltyStationCount <= 0 || penaltyStationCount >= this.parameters.penaltyZeroWeightStationCount) {
             return 0
         }
+        const geometry = this.getSearchGeometry(hypocenter, optionCache)
+        const cached = geometry?.inactivePenalties.get(penaltyPicks)
+        if(cached?.stationCount === penaltyStationCount) return cached.penalty
         const referenceDistance = this.getInactivePenaltyReferenceDistance(penaltyPicks, hypocenter, optionCache)
         if(referenceDistance === null) {
             return 0
         }
-        const stations = this.getSortedInactiveStations(penaltyPicks, hypocenter, optionCache)
-        if(stations.length === 0) {
-            return 0
+        const stations = this.getInactivePenaltyCandidates(penaltyPicks)
+        let count = 0
+        let hasInvalidDistance = false
+        for(const station of stations) {
+            if(!Number.isFinite(station?.updateStamp)) continue
+            const distance = this.getOptionCacheEntry(station, hypocenter, optionCache).distance
+            if(!Number.isFinite(distance)) hasInvalidDistance = true
+            if(distance <= referenceDistance) count++
         }
-
-        const penalty = this.findLastPenalizedStationIndex(stations, 0, stations.length - 1, hypocenter, optionCache, referenceDistance) + 1
-        return this.normalizeInactivePenalty(penalty, penaltyStationCount)
+        // Legacy sorting/binary search has special behavior around NaN. Preserve it for
+        // malformed coordinates; finite station distances use a single linear count.
+        if(hasInvalidDistance) {
+            const sorted = this.getSortedInactiveStations(penaltyPicks, hypocenter, optionCache)
+            count = this.findLastPenalizedStationIndex(sorted, 0, sorted.length - 1, hypocenter, optionCache, referenceDistance) + 1
+        }
+        const penalty = this.normalizeInactivePenalty(count, penaltyStationCount)
+        geometry?.inactivePenalties.set(penaltyPicks, { stationCount: penaltyStationCount, penalty })
+        return penalty
     }
 
     normalizeInactivePenalty(penalty, denominator) {
@@ -1506,12 +1661,12 @@ export class FindHypocenter {
     calcPickWaveOption(pick, hypocenter, wave, optionCache) {
         const cacheEntry = this.getOptionCacheEntry(pick, hypocenter, optionCache)
         if(!cacheEntry[wave]) {
-            const isPWave = wave == 'P'
-            const reachTime = calcReachTime(
-                cacheEntry.travelTime,
-                isPWave,
-                cacheEntry.depth,
-                cacheEntry.distance
+            const travel = cacheEntry.travel ?? cacheEntry
+            const reachTime = travel[`${wave}ReachTime`] ??= calcReachTime(
+                travel.travelTime,
+                wave == 'P',
+                travel.depth,
+                travel.distance
             ) * 1000
             cacheEntry[wave] = {
                 wave,
@@ -1526,15 +1681,57 @@ export class FindHypocenter {
     getOptionCacheEntry(source, hypocenter, optionCache) {
         let cacheEntry = optionCache?.get(source)
         if(!cacheEntry) {
-            const distance = calcDistanceKm([hypocenter.lat, hypocenter.lng], source.latLng)
-            cacheEntry = {
-                distance,
-                travelTime: this.profile.selectTravelTimeTable(distance),
-                depth: hypocenter.depth ?? this.parameters.initialDepth
+            const searchContext = optionCache?.get(searchContextCacheKey)
+            if(searchContext) {
+                const geometry = this.getSearchGeometry(hypocenter, optionCache)
+                let sourceKey = searchContext.sourceKeys.get(source)
+                if(sourceKey === undefined) {
+                    sourceKey = `${coordinateKey(source.latLng[0])}:${coordinateKey(source.latLng[1])}`
+                    searchContext.sourceKeys.set(source, sourceKey)
+                }
+                let horizontal = geometry.stations.get(sourceKey)
+                if(!horizontal) {
+                    const distance = calcDistanceKm([hypocenter.lat, hypocenter.lng], source.latLng)
+                    horizontal = { distance, travelTime: this.profile.selectTravelTimeTable(distance) }
+                    geometry.stations.set(sourceKey, horizontal)
+                }
+                const depth = hypocenter.depth ?? this.parameters.initialDepth
+                let stations = optionCache.get(searchTravelCacheKey)
+                if(!stations) {
+                    const key = hypocenterKey({ ...hypocenter, depth })
+                    stations = searchContext.hypocenters.get(key) ??
+                        this.setBoundedCacheEntry(searchContext.hypocenters, key, new Map(), 64)
+                    optionCache.set(searchTravelCacheKey, stations)
+                }
+                let travel = stations.get(sourceKey)
+                if(!travel) {
+                    travel = { distance: horizontal.distance, travelTime: horizontal.travelTime, depth,
+                        PReachTime: null, SReachTime: null }
+                    stations.set(sourceKey, travel)
+                }
+                // Only travel times are shared; implied origin times belong to this pick.
+                cacheEntry = { distance: horizontal.distance, travelTime: horizontal.travelTime, depth, travel }
+            }
+            else {
+                const distance = calcDistanceKm([hypocenter.lat, hypocenter.lng], source.latLng)
+                cacheEntry = { distance, travelTime: this.profile.selectTravelTimeTable(distance),
+                    depth: hypocenter.depth ?? this.parameters.initialDepth }
             }
             optionCache?.set(source, cacheEntry)
         }
         return cacheEntry
+    }
+
+    getSearchGeometry(hypocenter, optionCache) {
+        const cached = optionCache?.get(searchGeometryCacheKey)
+        if(cached) return cached
+        const searchContext = optionCache?.get(searchContextCacheKey)
+        if(!searchContext) return null
+        const key = epicenterKey(hypocenter)
+        const geometry = searchContext.epicenters.get(key) ?? this.setBoundedCacheEntry(searchContext.epicenters, key,
+            { stations: new Map(), inactivePenalties: new WeakMap() }, 32)
+        optionCache.set(searchGeometryCacheKey, geometry)
+        return geometry
     }
 
     evaluateHypocenter(picks, hypocenter, previousWaveMaps = null, penaltyContext = this.createInactivePenaltyContext(picks)) {
@@ -1621,6 +1818,10 @@ export class FindHypocenter {
     }) {
         if(!outlierFilterStage) return false
         if(originEntries.length < outlierFilterStage.minCount) return false
+        // The final threshold can never be below minResidual. Avoid the growing
+        // residual scan when either phase already satisfies that lower bound.
+        if(Math.abs(options.P.originStamp - originStamp) <= outlierFilterStage.minResidual ||
+            Math.abs(options.S.originStamp - originStamp) <= outlierFilterStage.minResidual) return false
         const meanResidual = this.calcMeanAbsResidual(originEntries, originStamp)
         const threshold = this.calcResidualOutlierThreshold(
             meanResidual,
@@ -1655,7 +1856,26 @@ export class FindHypocenter {
         return indexes
     }
 
+    createOriginEntries() {
+        const entries = []
+        entries[originSumsCacheKey] = { weight: 0, weightedValue: 0, value: 0 }
+        return entries
+    }
+
+    appendOriginEntry(entries, entry) {
+        entries.push(entry)
+        const sums = entries[originSumsCacheKey]
+        if(sums) {
+            // Same append/summation order as the original reductions, including fallback.
+            sums.weight += entry.weight
+            sums.weightedValue += entry.value * entry.weight
+            sums.value += entry.value
+        }
+    }
+
     calcWeightedMean(entries) {
+        const sums = entries[originSumsCacheKey]
+        if(sums) return sums.weight > 0 ? sums.weightedValue / sums.weight : sums.value / entries.length
         const weightSum = this.calcWeightSum(entries)
         if(weightSum > 0) {
             return entries.reduce((sum, entry) => sum + entry.value * entry.weight, 0) / weightSum
@@ -1680,6 +1900,7 @@ export class FindHypocenter {
     }
 
     calcWeightSum(entries) {
+        if(entries[originSumsCacheKey]) return entries[originSumsCacheKey].weight
         return entries.reduce((sum, entry) => sum + entry.weight, 0)
     }
 
@@ -1709,6 +1930,7 @@ export class FindHypocenter {
     createInvalidLikelihood(firstWave = null, lastWave = null, scenario = null) {
         return {
             score: Infinity,
+            searchScore: Infinity,
             rmse: Infinity,
             inactivePenalty: 0,
             inactivePenaltyWeight: 0,
