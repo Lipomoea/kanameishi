@@ -107,7 +107,11 @@ const generateWindCirclePoints = (lat, lng, radii) => {
             points.push(getCoordByDistanceBearing(lat, lng, r, i));
         }
     }
-    return points;
+    // Keep wind-circle vertices near the center across the antimeridian.
+    return points.map(([pointLat, pointLng]) => [
+        pointLat,
+        pointLng + 360 * Math.round((lng - pointLng) / 360)
+    ]);
 };
 
 const createTyphoonWindCircles = (centerLat, centerLng, radius7, radius10, radius12) => {
