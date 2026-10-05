@@ -22,11 +22,20 @@ pub struct PalertClient {
 impl PalertClient {
     pub fn new() -> Self {
         let build_http = |timeout| {
-            Client::builder()
+            let builder = Client::builder()
                 .connect_timeout(timeout)
                 .timeout(timeout)
                 .redirect(Policy::none())
-                .user_agent("kanameishi")
+                .user_agent("kanameishi");
+
+            // Use system certificate-chain handling where the native backend supports it.
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            let builder = builder.use_native_tls();
+
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            let builder = builder.use_rustls_tls();
+
+            builder
                 .build()
                 .map_err(|err| format!("Failed to initialize P-Alert HTTP client: {err}"))
         };

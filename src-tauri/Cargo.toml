@@ -31,6 +31,10 @@ tauri-plugin-os = "2"
 tauri-plugin-http = "2"
 tauri-plugin-clipboard-manager = "2"
 
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+# This also selects native TLS for tauri-plugin-http's default client.
+reqwest = { version = "0.12", default-features = false, features = ["native-tls-alpn"] }
+
 # [target.'cfg(target_os = "macos")'.dependencies]
 # cocoa = "0.24"
 # objc = "0.2"
