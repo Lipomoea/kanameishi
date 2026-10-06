@@ -88,6 +88,7 @@ const createDefaultSettings = () => {
             displayUser: false,
             displayLegend: true,
             displayCountdown: false,
+            countdownBarStyle: 'remaining-time',
             forceDisplayCountdown: false,
             playCountdownSound: false,
             countdownOnlyIntense: false,

@@ -47,13 +47,29 @@
                             </div>
                         </div>
                         <div class="countdown eew realtime" v-if="settingsStore.mainSettings.displayCountdown">
-                            <div class="shindo-bar" @dblclick="event.showPCountdown = !event.showPCountdown"
-                            :class="event.showPCountdown ? 'blue' 
-                            : event.countdown < 0 || event.eqMessage.isCanceled ? 'gray' 
-                            : event.countdown <= 15 ? 'red' 
-                            : event.countdown <= 60 ? 'orange' 
-                            : 'yellow'">
-                                {{ event.countdown == -1 ? '-' : Math.ceil(event.showPCountdown ? event.pCountdown : event.countdown) }}秒
+                            <div
+                                class="shindo-bar"
+                                :class="[getCountdownBarClass(event), { 'countdown-centered': event.countdown <= 0 }]"
+                                :style="getCountdownProgressStyle(event)"
+                                @dblclick="toggleCountdownWave(event)"
+                            >
+                                <template v-if="isWaveProgress">
+                                    <template v-if="canShowWaveProgress(event)">
+                                        <span class="wave-fill p-wave-fill" aria-hidden="true"></span>
+                                        <span class="wave-fill s-wave-fill" aria-hidden="true"></span>
+                                    </template>
+                                    <span class="countdown-text-track">
+                                        <span class="countdown-moving-text">{{ getCountdownText(event) }}</span>
+                                    </span>
+                                    <span
+                                        v-if="canShowWaveProgress(event)"
+                                        class="countdown-text-track countdown-text-overlay"
+                                        aria-hidden="true"
+                                    >
+                                        <span class="countdown-moving-text">{{ getCountdownText(event) }}</span>
+                                    </span>
+                                </template>
+                                <span v-else class="countdown-text">{{ getCountdownText(event) }}</span>
                             </div>
                             <div class="info" v-if="event.nearestJmaLoc">
                                 <div class="intensity" :class="setClassName(event.userShindo, true, event.eqMessage.isCanceled)">
@@ -575,6 +591,40 @@ watch(activeSources, newVal => {
         statusStore.isActive[source] = newVal.has(source)
     })
 })
+const isWaveProgress = computed(() => settingsStore.mainSettings.countdownBarStyle == 'wave-progress')
+const canShowWaveProgress = event => event.countdown >= 0 && !event.eqMessage.isCanceled
+const getCountdownText = event => {
+    const countdown = !isWaveProgress.value && event.showPCountdown ? event.pCountdown : event.countdown
+    if(isWaveProgress.value && countdown > 60) return ''
+    if(countdown == 0) return '已抵达'
+    const text = event.countdown == -1 ? '-' : Math.ceil(countdown)
+    return isWaveProgress.value ? `${text}` : `${text}秒`
+}
+const getCountdownBarClass = event => {
+    const unavailable = event.countdown < 0 || event.eqMessage.isCanceled
+    if(isWaveProgress.value) return unavailable ? 'gray' : 'wave-progress'
+    if(event.showPCountdown) return 'blue'
+    if(unavailable) return 'gray'
+    if(event.countdown <= 15) return 'red'
+    if(event.countdown <= 60) return 'orange'
+    return 'yellow'
+}
+const toggleCountdownWave = event => {
+    if(!isWaveProgress.value) event.showPCountdown = !event.showPCountdown
+}
+const getWaveProgress = (reachTime, countdown) => {
+    if(!Number.isFinite(reachTime) || reachTime < 0 || !Number.isFinite(countdown) || countdown < 0) return 0
+    if(reachTime === 0) return countdown === 0 ? 100 : 0
+    // The existing countdown uses the event's origin time and calibrated clock.
+    return Math.min(Math.max(1 - countdown / reachTime, 0), 1) * 100
+}
+const getCountdownProgressStyle = event => {
+    if(!isWaveProgress.value) return null
+    return {
+        '--p-progress': (event.eqMessage.isCanceled ? 0 : getWaveProgress(event.pReachTime, event.pCountdown)) + '%',
+        '--s-progress': (event.eqMessage.isCanceled ? 0 : getWaveProgress(event.sReachTime, event.countdown)) + '%',
+    }
+}
 const getBarClass = (event)=>{
     const eqMessage = event.eqMessage
     if(eqMessage.isEew){
@@ -1792,6 +1842,54 @@ onUnmounted(() => {
                 }
                 .countdown .shindo-bar{
                     pointer-events: auto;
+                    position: relative;
+                    overflow: hidden;
+                    &.wave-progress {
+                        background-color: var(--gray);
+                    }
+                    .wave-fill {
+                        position: absolute;
+                        left: 0;
+                        top: 0;
+                        height: 100%;
+                        pointer-events: none;
+                    }
+                    .p-wave-fill {
+                        width: var(--p-progress);
+                        background-color: var(--blue);
+                    }
+                    .s-wave-fill {
+                        width: var(--s-progress);
+                        background-color: var(--red);
+                    }
+                    .countdown-text {
+                        position: relative;
+                    }
+                    .countdown-text-track {
+                        position: absolute;
+                        inset: 0;
+                        color: #000000;
+                        pointer-events: none;
+                    }
+                    .countdown-moving-text {
+                        box-sizing: border-box;
+                        width: var(--s-progress);
+                        min-width: max-content;
+                        max-width: 100%;
+                        height: 100%;
+                        padding: 0 2px;
+                        display: flex;
+                        justify-content: flex-end;
+                        align-items: center;
+                    }
+                    &.countdown-centered .countdown-moving-text {
+                        width: 100%;
+                        justify-content: center;
+                    }
+                    .countdown-text-overlay {
+                        color: #ffffff;
+                        clip-path: inset(0 calc(100% - var(--s-progress)) 0 0);
+                    }
                 }
                 .realtime{
                     width: 100px;

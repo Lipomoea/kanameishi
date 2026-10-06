@@ -784,6 +784,18 @@
                                 <el-switch v-model="settingsStore.mainSettings.displayCountdown" />
                             </div>
                             <div class="switch-full pl-4">
+                                <span>抵达倒计时显示样式</span>
+                                <el-select
+                                    style="width: 156px;"
+                                    v-model="settingsStore.mainSettings.countdownBarStyle"
+                                    :disabled="!settingsStore.mainSettings.displayCountdown"
+                                    size="small"
+                                >
+                                    <el-option label="横波抵达倒计时" value="remaining-time" />
+                                    <el-option label="纵波、横波抵达进度条" value="wave-progress" />
+                                </el-select>
+                            </div>
+                            <div class="switch-full pl-4">
                                 <span>强制计算倒计时（即使低精度）</span>
                                 <el-switch v-model="settingsStore.mainSettings.forceDisplayCountdown" :disabled="!settingsStore.mainSettings.displayCountdown" />
                             </div>
