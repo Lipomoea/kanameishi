@@ -784,14 +784,14 @@
                                 <el-switch v-model="settingsStore.mainSettings.displayCountdown" />
                             </div>
                             <div class="switch-full pl-4">
-                                <span>抵达倒计时显示样式</span>
+                                <span>抵达倒计时背景样式</span>
                                 <el-select
-                                    style="width: 156px;"
+                                    style="width: 168px;"
                                     v-model="settingsStore.mainSettings.countdownBarStyle"
                                     :disabled="!settingsStore.mainSettings.displayCountdown"
                                     size="small"
                                 >
-                                    <el-option label="横波抵达倒计时" value="remaining-time" />
+                                    <el-option label="根据横波抵达倒计时变色" value="remaining-time" />
                                     <el-option label="纵波、横波抵达进度条" value="wave-progress" />
                                 </el-select>
                             </div>

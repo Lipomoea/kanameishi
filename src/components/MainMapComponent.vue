@@ -49,7 +49,7 @@
                         <div class="countdown eew realtime" v-if="settingsStore.mainSettings.displayCountdown">
                             <div
                                 class="shindo-bar"
-                                :class="[getCountdownBarClass(event), { 'countdown-centered': event.countdown <= 0 }]"
+                                :class="getCountdownBarClass(event)"
                                 :style="getCountdownProgressStyle(event)"
                                 @dblclick="toggleCountdownWave(event)"
                             >
@@ -58,16 +58,12 @@
                                         <span class="wave-fill p-wave-fill" aria-hidden="true"></span>
                                         <span class="wave-fill s-wave-fill" aria-hidden="true"></span>
                                     </template>
-                                    <span class="countdown-text-track">
-                                        <span class="countdown-moving-text">{{ getCountdownText(event) }}</span>
-                                    </span>
+                                    <span class="countdown-text-track">{{ getCountdownText(event) }}</span>
                                     <span
                                         v-if="canShowWaveProgress(event)"
                                         class="countdown-text-track countdown-text-overlay"
                                         aria-hidden="true"
-                                    >
-                                        <span class="countdown-moving-text">{{ getCountdownText(event) }}</span>
-                                    </span>
+                                    >{{ getCountdownText(event) }}</span>
                                 </template>
                                 <span v-else class="countdown-text">{{ getCountdownText(event) }}</span>
                             </div>
@@ -597,7 +593,7 @@ const getCountdownText = event => {
     const countdown = !isWaveProgress.value && event.showPCountdown ? event.pCountdown : event.countdown
     if(countdown == 0) return '已抵达'
     const text = event.countdown == -1 ? '-' : Math.ceil(countdown)
-    return isWaveProgress.value ? `${text}` : `${text}秒`
+    return `${text}秒`
 }
 const getCountdownBarClass = event => {
     const unavailable = event.countdown < 0 || event.eqMessage.isCanceled
@@ -1867,23 +1863,13 @@ onUnmounted(() => {
                     .countdown-text-track {
                         position: absolute;
                         inset: 0;
-                        color: #000000;
-                        pointer-events: none;
-                    }
-                    .countdown-moving-text {
                         box-sizing: border-box;
-                        width: var(--s-progress);
-                        min-width: max-content;
-                        max-width: 100%;
-                        height: 100%;
                         padding: 0 2px;
                         display: flex;
-                        justify-content: flex-end;
-                        align-items: center;
-                    }
-                    &.countdown-centered .countdown-moving-text {
-                        width: 100%;
                         justify-content: center;
+                        align-items: center;
+                        color: #000000;
+                        pointer-events: none;
                     }
                     .countdown-text-overlay {
                         color: #ffffff;
