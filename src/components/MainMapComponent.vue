@@ -595,7 +595,6 @@ const isWaveProgress = computed(() => settingsStore.mainSettings.countdownBarSty
 const canShowWaveProgress = event => event.countdown >= 0 && !event.eqMessage.isCanceled
 const getCountdownText = event => {
     const countdown = !isWaveProgress.value && event.showPCountdown ? event.pCountdown : event.countdown
-    if(isWaveProgress.value && countdown > 60) return ''
     if(countdown == 0) return '已抵达'
     const text = event.countdown == -1 ? '-' : Math.ceil(countdown)
     return isWaveProgress.value ? `${text}` : `${text}秒`
