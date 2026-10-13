@@ -508,8 +508,8 @@ const createInferredWaveLayers = (latLng, result) => {
     const passedTime = (updateStamp - result.originStamp) / 1000
     if(!Number.isFinite(passedTime) || passedTime < 0) return []
     return [
-        createInferredWaveLayer(latLng, result.hypocenter.depth, passedTime, true, '#ffffff'),
-        createInferredWaveLayer(latLng, result.hypocenter.depth, passedTime, false, '#ff9500')
+        createInferredWaveLayer(latLng, result.hypocenter.depth, passedTime, true, 'white'),
+        createInferredWaveLayer(latLng, result.hypocenter.depth, passedTime, false, 'var(--swave-orange)')
     ].filter(Boolean)
 }
 const createInferredWaveLayer = (latLng, depth, passedTime, isPWave, color) => {

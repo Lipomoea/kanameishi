@@ -340,7 +340,7 @@ const createInferredWaveLayers = (latLng, result) => {
         if(wave.radius > 2000) wave = calcWaveDistance(travelTimes.jb, isPWave, result.hypocenter.depth, passedTime)
         if(!Number.isFinite(wave.radius) || wave.radius <= 0) continue
         L.circle(latLng, {
-            radius: wave.radius * 1000, color: isPWave ? '#ffffff' : '#ff9500',
+            radius: wave.radius * 1000, color: isPWave ? 'white' : 'var(--swave-orange)',
             weight: 2, opacity: 1, fill: false, dashArray: '8 8', interactive: false, pane: 'wavePane'
         }).addTo(inferredHypocenterLayers)
     }
