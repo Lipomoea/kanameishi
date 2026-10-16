@@ -76,7 +76,9 @@ watch(eqMessage, (newVal)=>{
     }
     time -= passedTime
     if(newVal.isEew){
-        if(!(ignoredIds[`${newVal.source}|${newVal.id}`] > newVal.reportNum)) {
+        const ignoredMessage = ignoredIds[`${newVal.source}|${newVal.id}`]
+        if(!ignoredMessage || newVal.reportNum > ignoredMessage.reportNum ||
+        newVal.reportNum == ignoredMessage.reportNum && newVal.isCanceled > ignoredMessage.isCanceled) {
             let i = 0
             while(i < activeEewList.length){
                 if(judgeSameEvent(newVal, activeEewList[i].eqMessage)){

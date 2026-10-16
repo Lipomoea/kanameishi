@@ -562,7 +562,10 @@ export class EewEvent {
         }
     }
     terminate(force = false){
-        ignoredIds[`${this.eqMessage.source}|${this.eqMessage.id}`] = force ? Infinity : this.eqMessage.reportNum
+        ignoredIds[`${this.eqMessage.source}|${this.eqMessage.id}`] = {
+            reportNum: force ? Infinity : this.eqMessage.reportNum,
+            isCanceled: force || this.eqMessage.isCanceled
+        }
         const keys = Object.keys(ignoredIds)
         if(keys.length > 10) delete ignoredIds[keys[0]]
         clearTimeout(this.terminateTimer)
