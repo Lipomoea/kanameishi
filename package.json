@@ -1,6 +1,6 @@
 {
   "name": "kanameishi",
-  "version": "2.10.2",
+  "version": "2.10.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,6 +24,7 @@
     "axios": "^1.18.0",
     "dayjs": "^1.11.13",
     "element-plus": "^2.7.3",
+    "fflate": "0.8.2",
     "geokdbush": "^2.0.1",
     "kdbush": "^4.0.2",
     "leaflet": "^1.9.4",

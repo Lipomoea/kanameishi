@@ -8,10 +8,12 @@
 import { reactive, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue';
 import Http from '@/classes/Http';
 import { StationFrameQueue } from '@/features/stations/StationFrameQueue';
+import { tremConfig, selectTremStationSource } from '@/features/stations/TremConfig';
+import { parseTremStationList, readTremFrame, connectTremRts } from '@/features/stations/TremRtsClient';
 import { isNetworkPeriodActive } from '@/features/eew/EewNetworkRelations';
 import { useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
-import { seisNetUrls, iconUrls } from '@/utils/Urls';
+import { iconUrls } from '@/utils/Urls';
 import { playSound, sendMyNotification, focusWindow, getShindoFromInstShindo, stampToTime, getShindoFromLevel } from '@/utils/Utils';
 import 'leaflet/dist/leaflet.css';
 import { simpleIcon, TremStation } from '@/classes/StationClasses';
@@ -23,13 +25,13 @@ const settingsStore = useSettingsStore()
 const timeStore = useTimeStore()
 const useStationCanvasRenderer = computed(() => !settingsStore.advancedSettings.fallbackSvgStationRender)
 
-Object.assign(seisNetUrls, JSON.parse(localStorage.getItem('tremUrl'))?.seisNetUrls)
 const stationList = reactive({})
 let stationData
 const stations = reactive({})
 const taiwanSeisNetLayers = inject('taiwanSeisNetLayers')
 const unregisterSource = taiwanSeisNetLayers.registerSource('trem', stations, station => station.level)
 let map
+let mounted = false
 let stopped = false
 let requestGeneration = 0
 let latestFrameStamp = null
@@ -39,6 +41,9 @@ const frameQueue = new StationFrameQueue(
     () => settingsStore.mainSettings.displaySeisNet.httpDataPriority === 'complete'
 )
 const delay = computed(()=>statusStore.seisNetReplayDelay * 60000)
+const stationDataUrl = computed(() => selectTremStationSource(
+    tremConfig.value.stationSources, settingsStore.mainSettings.displaySeisNet.tremApi
+)?.url)
 const tremMaxShindo = inject('tremMaxShindo')
 const tremUpdateTime = inject('tremUpdateTime')
 const tremPeriodMaxShindo = inject('tremPeriodMaxShindo')
@@ -72,13 +77,14 @@ const update = ()=>{
     if(!render) pendingRender = true
     let maxInst = -3.1
     Object.keys(stations).forEach(id=>{
-        if(id in stationData){
-            const alert = !!stationData[id].alert
-            const intensity = alert ? stationData[id].I : stationData[id].i
+        const data = stationData[id]
+        if(Number.isFinite(data?.i)){
+            const alert = !!data.alert
+            const intensity = data.i
             stations[id].update(intensity, alert, render)
             if(intensity > maxInst) maxInst = intensity
         }
-        else stations[id].update(-3.1, false)
+        else stations[id].update(-3.1, false, render)
     })
     if(render && useStationCanvasRenderer.value) renderAll()
     tremMaxShindo.value = getShindoFromInstShindo(maxInst)
@@ -96,17 +102,24 @@ const clearReactiveObject = (obj) => {
     if(obj) for(let key in obj) delete obj[key]
 }
 let fetchStationTimer, requestInterval
-const isValidStationInfo = ([id, station]) => {
-    const info = Array.isArray(station?.info) ? station.info.at(-1) : null
-    return id.length > 0 && Number.isFinite(info?.lat) && Math.abs(info.lat) <= 90 &&
-        Number.isFinite(info?.lon) && Math.abs(info.lon) <= 180
-}
+let stationListGeneration = 0
+let stationListController, stopRealtime
+const replayControllers = new Set()
 const fetchStationList = async () => {
-    if(stopped) return
+    if(stopped || !tremConfig.value.stationList) return
+    const generation = stationListGeneration
+    const controller = new AbortController()
+    stationListController = controller
     try {
-        const res = await Http.get(seisNetUrls?.trem.stationList + `?time=${Date.now()}`)
-        if(stopped || !res || typeof res !== 'object' || Array.isArray(res)) return
-        const validStations = Object.fromEntries(Object.entries(res).filter(isValidStationInfo))
+        const url = new URL(tremConfig.value.stationList)
+        url.searchParams.set('time', Date.now())
+        // The server labels the CSV as application/json; always read it as text.
+        const res = await Http.get(url.toString(), {
+            responseType: 'text', transformResponse: [data => data], timeout: 30000,
+            signal: controller.signal
+        })
+        if(stopped || generation !== stationListGeneration) return
+        const validStations = parseTremStationList(res)
         if(Object.keys(validStations).length === 0) return
         if(JSON.stringify(validStations) != JSON.stringify(stationList)){
             clearReactiveObject(stationList)
@@ -116,7 +129,8 @@ const fetchStationList = async () => {
         console.log(err);
     }
     finally {
-        if(!stopped) {
+        if(stationListController === controller) stationListController = null
+        if(!stopped && generation === stationListGeneration) {
             fetchStationTimer = setTimeout(fetchStationList, Object.keys(stationList).length > 0 ? 10 * 60 * 1000 : 10 * 1000)
         }
     }
@@ -130,49 +144,68 @@ const commitFrame = ({ timestamp: frameStamp, data, generation }) => {
     tremUpdateTime.value = stampToTime(frameStamp, 8)
     update()
 }
-onMounted(()=>{
-    fetchStationList()
-    requestInterval = setInterval(async () => {
-        if(stopped) return
+const fetchReplayFrame = async () => {
+    if(stopped || delay.value <= 0 || !tremConfig.value.stationReplay) return
+    const generation = requestGeneration
+    const time = timeStore.getTimeStamp() - delay.value
+    const targetTime = Math.round(time / 1000)
+    const ticket = frameQueue.begin(targetTime * 1000)
+    if(!frameQueue.isPending(ticket)) return
+    const controller = new AbortController()
+    replayControllers.add(controller)
+    let frame = null
+    try {
+        const url = new URL(tremConfig.value.stationReplay)
+        url.pathname = `${url.pathname.replace(/\/+$/, '')}/${targetTime}`
+        const res = await Http.get(url.toString(), { timeout: 3000, signal: controller.signal })
+        if(stopped || generation !== requestGeneration || !frameQueue.isPending(ticket)) return
+        const parsed = readTremFrame(res)
+        if(parsed) frame = { ...parsed, generation }
+    }
+    catch(err) {
+        console.log(err)
+    }
+    finally {
+        replayControllers.delete(controller)
+        frameQueue.finish(ticket, frame)
+    }
+}
+const stopTransport = () => {
+    stopRealtime?.()
+    stopRealtime = null
+    clearInterval(requestInterval)
+    replayControllers.forEach(controller => controller.abort())
+    replayControllers.clear()
+}
+const restartTransport = (timelineSwitch = false) => {
+    if(!mounted || stopped) return
+    requestGeneration++
+    stopTransport()
+    if(timelineSwitch) pendingTimelineSwitch = true
+    frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
+    if(delay.value > 0) {
+        if(!tremConfig.value.stationReplay) return
+        fetchReplayFrame()
+        requestInterval = setInterval(fetchReplayFrame, 1000)
+    }
+    else if(stationDataUrl.value) {
         const generation = requestGeneration
-        const time = timeStore.getTimeStamp() - delay.value
-        const targetTime = delay.value > 0 ? Math.round(time / 1000) : null
-        const ticket = frameQueue.begin(targetTime === null ? null : targetTime * 1000)
-        let frame = null
-        try {
-            const res = await Http.get(stationDataUrl.value + (targetTime !== null ? `/${targetTime}` : `?time=${time}`), { timeout: 3000 })
-            if(stopped || generation != requestGeneration || !frameQueue.isPending(ticket)) return
-            if(res && Object.keys(res).length > 0){
-                const frameStamp = Number(res.time)
-                if(!Number.isFinite(frameStamp) || !res.station || typeof res.station !== 'object' || Array.isArray(res.station)) return
-                const isFirstFrameAfterTimelineSwitch = pendingTimelineSwitch
-                if(!isFirstFrameAfterTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return
-
-                frame = { timestamp: frameStamp, data: res.station, generation }
-            }
-        } catch (err) {
-            console.log(err);
-        }
-        finally {
-            frameQueue.finish(ticket, frame)
-        }
-    }, 1000);
+        stopRealtime = connectTremRts(stationDataUrl.value, frame => commitFrame({ ...frame, generation }))
+    }
+}
+onMounted(()=>{
+    mounted = true
+    fetchStationList()
+    restartTransport()
     document.addEventListener('visibilitychange', handleVisibilityChange)
 })
-const scheduleTimelineSwitch = () => {
-    requestGeneration++
-    frameQueue.reset()
-    pendingTimelineSwitch = true
-}
-let unwatchStationList, unwatchActivity, unwatchRender, unwatchDelay
+let unwatchStationList, unwatchActivity, unwatchRender
 watch(()=>statusStore.map, newVal=>{
     if(newVal !== null){
         map = newVal
         map.on('zoomend', renderAll)
         unwatchStationList = watch(stationList, newVal=>{
             if(Object.keys(newVal).length > 0){
-                requestGeneration++
-                frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
                 Object.keys(stations).forEach(id=>{
                     stations[id].terminate()
                     delete stations[id]
@@ -183,7 +216,9 @@ watch(()=>statusStore.map, newVal=>{
                     const station = reactive(new TremStation(map, id, latLng, -3.1, false, useStationCanvasRenderer.value))
                     stations[id] = station
                 })
-                renderAll()
+                // Metadata refreshes keep the active connection and its generation.
+                if(stationData && !pendingTimelineSwitch) update()
+                else renderAll()
             }
         }, { immediate: true })
         unwatchActivity = watch(activeLevels, (newVal)=>{
@@ -208,7 +243,15 @@ watch(()=>statusStore.map, newVal=>{
         )
     }
 }, { immediate: true })
-unwatchDelay = watch(delay, scheduleTimelineSwitch)
+watch([delay, stationDataUrl, () => tremConfig.value.stationReplay], ([newDelay], [oldDelay]) => {
+    restartTransport(newDelay !== oldDelay)
+}, { flush: 'sync' })
+watch(() => tremConfig.value.stationList, () => {
+    stationListGeneration++
+    clearTimeout(fetchStationTimer)
+    stationListController?.abort()
+    if(mounted) fetchStationList()
+}, { flush: 'sync' })
 watch(() => isNetworkPeriodActive('tremNet', statusStore.isActive), newVal=>{
     if(newVal){
         if(periodMaxLevel == -1){
@@ -260,22 +303,20 @@ watch(currentMaxShindo, (newVal, oldVal)=>{
         focused = false
     }
 })
-const stationDataUrl = computed(() => delay.value > 0 ? seisNetUrls?.trem.stationData : seisNetUrls?.trem.stationData.replace(/api-\d/, settingsStore.mainSettings.displaySeisNet.tremApi))
-watch([() => settingsStore.mainSettings.displaySeisNet.httpDataPriority, stationDataUrl], () => {
-    requestGeneration++
-    frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
+watch(() => settingsStore.mainSettings.displaySeisNet.httpDataPriority, () => {
+    if(delay.value > 0) restartTransport()
 }, { flush: 'sync' })
 onBeforeUnmount(()=>{
     stopped = true
     requestGeneration++
     frameQueue.reset()
     clearTimeout(fetchStationTimer)
-    clearInterval(requestInterval)
+    stationListController?.abort()
+    stopTransport()
     document.removeEventListener('visibilitychange', handleVisibilityChange)
     if(unwatchStationList) unwatchStationList()
     if(unwatchActivity) unwatchActivity()
     if(unwatchRender) unwatchRender()
-    if(unwatchDelay) unwatchDelay()
     if(map) {
         map.off('zoomend', renderAll)
     }

@@ -30,7 +30,7 @@ const createDefaultSettings = () => {
                 palertHypoInfTextInfo: 0,
                 displayPalertShindo: false,
                 tremNet: false,
-                tremApi: 'lb-1',
+                tremApi: '',
                 displayTremShindo: false,
                 niedNet: false,
                 niedSensitivity: 1,

@@ -118,17 +118,13 @@
                             <div class="switch-full pl-4">
                                 <span>API</span>
                                 <el-select
-                                    v-model="settingsStore.mainSettings.displaySeisNet.tremApi"
+                                    v-model="tremApi"
                                     size="small"
                                     :disabled="!settingsStore.mainSettings.displaySeisNet.tremNet"
                                     style="width: 72px;"
                                 >
-                                    <el-option label="api-1" value="api-1" />
-                                    <el-option label="api-2" value="api-2" />
-                                    <el-option label="lb-1" value="lb-1" />
-                                    <el-option label="lb-2" value="lb-2" />
-                                    <el-option label="lb-3" value="lb-3" />
-                                    <el-option label="lb-4" value="lb-4" />
+                                    <el-option v-for="source in tremConfig.stationSources" :key="source.id"
+                                        :label="source.name" :value="source.id" />
                                 </el-select>
                             </div>
                         </div>
@@ -1478,7 +1474,8 @@ import { useStatusStore } from '@/stores/status';
 import { chimeUrls, utilUrls } from '@/utils/Urls';
 import { APP_TITLE, APP_VERSION } from '@/utils/AppInfo';
 import Http from '@/classes/Http';
-import { h, ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { tremConfig, setTremConfig, selectTremStationSource } from '@/features/stations/TremConfig';
+import { h, ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Key, QuestionFilled, Setting, TopRight } from '@element-plus/icons-vue';
 import { calcPassedTime, formatCsis, openUrl, playSound, setClassName, shindoScale, calcCsisLevel, formatTimeZone, systemTimeZone } from '@/utils/Utils';
 import { join, appDataDir } from "@tauri-apps/api/path";
@@ -1506,6 +1503,10 @@ const simplifyMarks = {
 const settingsStore = useSettingsStore()
 const accessStore = useAccessStore()
 const statusStore = useStatusStore()
+const tremApi = computed({
+    get: () => selectTremStationSource(tremConfig.value.stationSources, settingsStore.mainSettings.displaySeisNet.tremApi)?.id ?? '',
+    set: id => { settingsStore.mainSettings.displaySeisNet.tremApi = id }
+})
 const showDataSourceManager = ref(false)
 const replayDateTime = ref('')
 const setReplayDateTime = () => {
@@ -1768,6 +1769,7 @@ const handleAdvance = (val)=>{
             accessStore.revoke('tremFunctions')
             settingsStore.mainSettings.displaySeisNet.tremNet = false
             localStorage.removeItem('tremUrl')
+            setTremConfig(null)
             handleNeedReload()
             ElMessage({
                 message: '功能已关闭',
@@ -1827,6 +1829,7 @@ const postVerify = async (type = verifyType)=>{
             if(statusStore.isResettingApp) return
             if(res && res.success){
                 statusStore.setLocalStorageItem('tremUrl', JSON.stringify(res.data))
+                setTremConfig(res.data)
                 accessStore.grant('tremFunctions')
                 handleNeedReload()
                 verifyDialog.value = false

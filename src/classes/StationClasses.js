@@ -583,9 +583,10 @@ export class TremStation {
         if(!this.useCanvasLayer) this.render()
     }
     update(intensity, isActive, render = true){
+        const intensityChanged = intensity !== this.intensity
         this.intensity = intensity
         const level = getLevelFromInstShindo(intensity)
-        if(level != this.level){
+        if(level != this.level || intensityChanged){
             this.shindo = getShindoFromInstShindo(intensity)
             this.level = level
             render && !this.useCanvasLayer && this.render()
@@ -668,15 +669,25 @@ export class TremStation {
             }
         }
     }
+    getColorRadius(zoom){
+        // Remap quiet readings only for dot colors; keep missing data and intensity levels.
+        const intensity = this.intensity
+        const colorIntensity = this.level < 0 || intensity >= 0.5 ? intensity
+            : intensity <= 0 ? -3 : intensity * 7 - 3
+        const colorLevel = getLevelFromInstShindo(colorIntensity)
+        const { color } = getNiedColorRadius(colorLevel, zoom)
+        const { radius } = getNiedColorRadius(this.level, zoom)
+        return { color, radius }
+    }
     setColorRadius(){
         const zoom = this.map.getZoom()
-        const { color, radius } = getNiedColorRadius(this.level, zoom)
+        const { color, radius } = this.getColorRadius(zoom)
         this.color = color
         this.radius = radius
     }
     getCanvasDrawInfo(zoom = this.map.getZoom()){
         if(!settingsStore) settingsStore = useSettingsStore()
-        const { color, radius } = getNiedColorRadius(this.level, zoom)
+        const { color, radius } = this.getColorRadius(zoom)
         return {
             latLng: this.latLng,
             level: this.level,
