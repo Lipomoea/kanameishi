@@ -1,26 +1,24 @@
 import { defineStore } from 'pinia';
 import Http from '@/classes/Http';
-import WebSocketObj from '@/classes/WebSocket';
-import { eqUrls, FAN_API_APP_ID, iconUrls, tsunamiUrls } from '@/utils/Urls';
-import { setClassName, calcCsisLevel, stampToTime, getShindoFromInstShindo, shindoScaleKanji, getShindoRank, calcTimeDiff, playSound, sendMyNotification, focusWindow, formatShindo, timeToStamp, systemTimeZone, convertTimeString, convertCompactTimeString } from '@/utils/Utils';
+import { WolfxClient, LipoApiClient, P2pQuakeClient, GlobalQuakeClient } from '@/classes/WebSocket';
+import { eqUrls, iconUrls, tsunamiUrls } from '@/utils/Urls';
+import { setClassName, calcCsisLevel, stampToTime, getShindoFromInstShindo, shindoScaleKanji, getShindoRank, calcTimeDiff, playSound, sendMyNotification, focusWindow, formatShindo, timeToStamp, systemTimeZone, convertCompactTimeString } from '@/utils/Utils';
 import { jmaSeisIntLoc } from '@/utils/JmaSeisIntLoc';
 import { useSettingsStore } from './settings';
 import { isTauri } from '@tauri-apps/api/core';
 import { getFEName } from '@/utils/FERegions';
-import isEqual from 'lodash/isEqual';
-import dayjs from "dayjs";
+import { normalizeUsgsEvent, hashUsgsContent } from '@/utils/UsgsData';
 import {
+    dataSourceProviders,
     eewSources,
     eqlistSources,
     tsunamiSources,
     wolfxSocketSources,
-    fanSocketSources,
+    lipoSocketSources,
+    wolfxSourceTypes,
+    lipoSourceTypes,
     p2pquakeSocketSources,
 } from '@/utils/DataSources';
-// import utc from "dayjs/plugin/utc";
-// import timezone from "dayjs/plugin/timezone";
-// dayjs.extend(utc);
-// dayjs.extend(timezone);
 
 export const defaultEqMessage = {
     source: '',
@@ -32,6 +30,7 @@ export const defaultEqMessage = {
     reportNum: 0,
     reportNumText: '',
     reportTime: '',
+    reviewType: '',
     isAssumption: false,
     isWarn: false,
     isFinal: false,
@@ -69,112 +68,90 @@ export const defaultTsunamiMessage = {
 export { eewSources, eqlistSources, tsunamiSources }
 export const seisNetSources = ['palertNet', 'tremNet', 'niedNet', 'kmaNet']
 
-const wolfx2Source = {
-    'jma_eew': 'jmaEew',
-    'cwa_eew': 'cwaEew',
-    'cenc_eew': 'ceaEew',
-    'sc_eew': 'scEew',
-    'fj_eew': 'fjEew',
-    'jma_eqlist': 'jmaEqlist',
-    'cenc_eqlist': 'cencEqlist',
-}
-const source2Fan = {
-    'jmaEew': 'jma',
-    'cwaEew': 'cwa-eew',
-    'iclEew': 'icl',
-    'scEew': 'sichuan',
-    'fjEew': 'fujian',
-    'kmaEew': 'kma-eew',
-    'cwaEqlist': 'cwa',
-    'cencEqlist': 'cenc',
-    'kmaEqlist': 'kma',
-    'usgsEqlist': 'usgs',
-    'fssnEqlist': 'fssn',
-    'nmefcTsunami': 'tsunami',
-}
-const fan2Source = {
-    'jma': 'jmaEew',
-    'cwa-eew': 'cwaEew',
-    'icl': 'iclEew',
-    'sichuan': 'scEew',
-    'fujian': 'fjEew',
-    'kma-eew': 'kmaEew',
-    'cwa': 'cwaEqlist',
-    'cenc': 'cencEqlist',
-    'kma': 'kmaEqlist',
-    'usgs': 'usgsEqlist',
-    'fssn': 'fssnEqlist',
-    'tsunami': 'nmefcTsunami',
-}
+const wolfx2Source = Object.fromEntries(Object.entries(wolfxSourceTypes).map(([source, type]) => [type, source]))
+const lipo2Source = Object.fromEntries(Object.entries(lipoSourceTypes).map(([source, type]) => [type, source]))
 
+// Provider IDs are stable parser keys; only EEW uses these numbers as priorities (lower wins).
 export const sourceTypes = {
     jmaEew: {
-        0: 'Wolfx',
-        1: 'FAN',
-        2: 'NIED'
+        0: 'wolfx',
+        1: 'lipo'
     },
     cwaEew: {
-        0: 'Wolfx',
-        1: 'FAN'
+        0: 'wolfx'
     },
     ceaEew: {
-        0: 'Wolfx',
-        1: 'FAN'
+        0: 'lipo',
+        1: 'wolfx'
     },
     iclEew: {
-        1: 'FAN'
-    },
-    scEew: {
-        0: 'Wolfx',
-        1: 'FAN'
-    },
-    fjEew: {
-        0: 'Wolfx',
-        1: 'FAN'
+        1: 'lipo'
     },
     kmaEew: {
-        1: 'FAN'
+        1: 'lipo'
     },
     gqEew: {
-        0: 'S',
-        1: 'A',
-        2: 'B',
-        3: 'C',
-        4: 'D',
-        5: 'E',
-        6: 'F'
+        0: 'globalquake'
     },
     mockEew: {
-        0: 'MOCK'
+        0: 'mock'
     },
     jmaEqlist: {
-        0: 'P2PQ'
+        0: 'p2pquake'
     },
     cwaEqlist: {
-        1: 'FAN'
+        1: 'lipo'
     },
     cencEqlist: {
-        0: 'Wolfx',
-        1: 'FAN'
+        0: 'wolfx',
+        1: 'lipo'
     },
     kmaEqlist: {
-        1: 'FAN'
+        1: 'lipo'
     },
     usgsEqlist: {
-        0: 'USGS',
-        1: 'FAN'
-    },
-    fssnEqlist: {
-        1: 'FAN'
+        0: 'usgs',
+        1: 'lipo'
     },
     history: {
         0: ''
     }
 }
 
-let usgsCache = null
+const getSourceType = (source, provider) => {
+    const entry = Object.entries(sourceTypes[source] ?? {}).find(([, name]) => name === provider)
+    return entry ? Number(entry[0]) : undefined
+}
 
-const maxIntReportNum = 50
+export const getProviderLabel = eqMessage =>
+    dataSourceProviders[sourceTypes[eqMessage.source]?.[eqMessage.type]] ?? ''
+
+const irDetailCache = new Map()
+const irDetailRequests = new Map()
+
+const formatLipoNumber = (value, digits, unknown = '不明') => Number.isFinite(value) ? value.toFixed(digits) : unknown
+
+const createUsgsMessage = event => {
+    const originTime = stampToTime(event.originTimeStamp, systemTimeZone)
+    const translated = Number.isFinite(event.latitude) && Number.isFinite(event.longitude)
+        ? getFEName(event.latitude, event.longitude) : ''
+    const hypocenter = translated || event.epicenter
+    const title = 'USGS' + (event.reviewType.toLowerCase() === 'reviewed' ? '正式' : '自动') + '测定'
+    const maxIntensity = event.magnitude == null || event.depth == null ? '?' : calcCsisLevel(event.magnitude, event.depth, 0)
+    return {
+        source: 'usgsEqlist', id: event.id, timeZone: systemTimeZone, useShindo: false,
+        reviewType: event.reviewType,
+        title, titleText: title, hypocenter, hypocenterText: '震中: ' + hypocenter,
+        lat: event.latitude, lng: event.longitude, depth: event.depth ?? -1,
+        depthText: '深度: ' + (event.depth == null ? '不明' : event.depth.toFixed(0) + 'km'),
+        originTime, originTimeStamp: event.originTimeStamp, originTimeText: '发震时间: ' + originTime,
+        reportTime: stampToTime(event.versionTime, systemTimeZone), reportTimeStamp: event.versionTime,
+        magnitude: event.magnitude ?? -1, magnitudeText: '震级: ' + formatLipoNumber(event.magnitude, 1),
+        maxIntensity, maxIntensityText: '预估最大烈度: ' + maxIntensity,
+        className: setClassName(maxIntensity, false), url: event.url,
+    }
+}
+
 const cencHistoryTolerance = 1e-9
 
 const isSameCencHistoryEvent = (event1, event2) => {
@@ -198,13 +175,14 @@ export const useStatusStore = defineStore('statusStore', {
         httpRequest: null,
         wsConnectTimer: null,
         wolfxSocket: null,
-        fanSocket: null,
-        fanAuthStatus: -1,
+        lipoSocket: null,
+        lipoAuthStatus: -1,
+        lipoError: '',
         p2pquakeSocket: null,
         gqSocket: null,
         webSocketStatus: {
             wolfx: { readyState: 4, urlIndex: 0 },
-            fan: { readyState: 4, urlIndex: 0 },
+            lipo: { readyState: 4, urlIndex: 0 },
             p2pquake: { readyState: 4, urlIndex: 0 },
             gq: { readyState: 4, urlIndex: 0 },
         },
@@ -217,8 +195,6 @@ export const useStatusStore = defineStore('statusStore', {
             cwaEew: Object.assign({}, defaultEqMessage),
             ceaEew: Object.assign({}, defaultEqMessage),
             iclEew: Object.assign({}, defaultEqMessage),
-            scEew: Object.assign({}, defaultEqMessage),
-            fjEew: Object.assign({}, defaultEqMessage),
             kmaEew: Object.assign({}, defaultEqMessage),
             gqEew: Object.assign({}, defaultEqMessage),
             mockEew: Object.assign({}, defaultEqMessage),
@@ -227,7 +203,6 @@ export const useStatusStore = defineStore('statusStore', {
             cencEqlist: Object.assign({}, defaultEqMessage),
             kmaEqlist: Object.assign({}, defaultEqMessage),
             usgsEqlist: Object.assign({}, defaultEqMessage),
-            fssnEqlist: Object.assign({}, defaultEqMessage),
         },
         tsunamiMessage: {
             jmaTsunami: Object.assign({}, defaultTsunamiMessage),
@@ -238,8 +213,6 @@ export const useStatusStore = defineStore('statusStore', {
             cwaEew: false,
             ceaEew: false,
             iclEew: false,
-            scEew: false,
-            fjEew: false,
             kmaEew: false,
             gqEew: false,
             mockEew: false,
@@ -248,7 +221,6 @@ export const useStatusStore = defineStore('statusStore', {
             cencEqlist: false,
             kmaEqlist: false,
             usgsEqlist: false,
-            fssnEqlist: false,
             jmaTsunami: false,
             nmefcTsunami: false,
             palertNet: false,
@@ -262,19 +234,23 @@ export const useStatusStore = defineStore('statusStore', {
             jmaEqlist: [],
             cwaEqlist: [],
             cencEqlist: [],
+            kmaEqlist: [],
             usgsEqlist: [],
-            fssnEqlist: [],
         },
+        usgsHistoryCache: { lipo: new Map(), usgs: new Map() },
+        usgsRealtimeCache: new Map(),
+        usgsHttpRequestId: 0,
         cencHistoryCache: {
             wolfx: [],
-            fan: [],
+            lipo: [],
         },
         intReportIds: new Set(),
+        intReportsInitialized: false,
         historyList: null,
     }),
     getters: {
         activeWolfxSources: state => wolfxSocketSources.filter(source => state.sourceRoutes[source]?.wolfx),
-        activeFanSources: state => fanSocketSources.filter(source => state.sourceRoutes[source]?.fan),
+        activeLipoSources: state => lipoSocketSources.filter(source => state.sourceRoutes[source]?.lipo),
         activeP2pquakeSources: state => p2pquakeSocketSources.filter(source => state.sourceRoutes[source]?.p2pquake),
         activeEqlistSources: state => eqlistSources.filter(source => state.enabledSource.includes(source)),
     },
@@ -290,6 +266,11 @@ export const useStatusStore = defineStore('statusStore', {
             this.enabledSource = Object.entries(this.sourceRoutes)
                 .filter(([, apis]) => Object.values(apis).some(Boolean))
                 .map(([source]) => source)
+            this.usgsHttpRequestId++
+            for(const provider of ['lipo', 'usgs']) {
+                if(!this.isApiEnabled('usgsEqlist', provider)) this.usgsHistoryCache[provider].clear()
+            }
+            this.rebuildUsgsHistory(true)
         },
         isApiEnabled(source, api) {
             return Boolean(this.sourceRoutes[source]?.[api])
@@ -299,20 +280,101 @@ export const useStatusStore = defineStore('statusStore', {
                 Object.assign(this.webSocketStatus[source], { readyState, urlIndex })
             })
         },
-        setEqMessage(source, data, type = 0) {
+        setUsgsEqMessage(data, provider, type) {
+            const event = normalizeUsgsEvent(data, provider)
+            if(!event) return
+            // Single updates extend the provider's latest full snapshot; they never delete IDs.
+            const events = this.usgsHistoryCache[provider]
+            const previous = events.get(event.id)
+            if(!previous || event.versionTime >= previous.versionTime) {
+                events.set(event.id, event)
+                this.rebuildUsgsHistory()
+            }
+            const cached = this.usgsRealtimeCache.get(event.id)
+            if(cached && event.versionTime <= cached.timestamp) return
+            const hash = hashUsgsContent(event)
+            this.usgsRealtimeCache.set(event.id, { hash, timestamp: event.versionTime })
+            // Advance the watermark for metadata-only changes without refreshing the report time.
+            if(cached?.hash === hash) return
+            Object.assign(this.eqMessage.usgsEqlist, createUsgsMessage(event), { type })
+        },
+        replaceUsgsHistory(data, provider) {
+            if(!Array.isArray(data)) return
+            const events = data.map(item => normalizeUsgsEvent(item, provider)).filter(Boolean)
+            if(data.length > 0 && events.length === 0) return
+            const previous = this.usgsHistoryCache[provider]
+            const next = new Map()
+            for(const event of events) {
+                const existing = next.get(event.id) || previous.get(event.id)
+                next.set(event.id, existing && existing.versionTime > event.versionTime ? existing : event)
+            }
+            this.usgsHistoryCache[provider] = next
+            // History updates do not seed or advance realtime content hashes.
+            this.rebuildUsgsHistory(true)
+        },
+        rebuildUsgsHistory(prune = false) {
+            const merged = new Map()
+            // Official GeoJSON wins a tie, independently of realtime's equal-time rejection.
+            for(const provider of ['lipo', 'usgs']) {
+                if(!this.isApiEnabled('usgsEqlist', provider)) continue
+                for(const [id, event] of this.usgsHistoryCache[provider]) {
+                    const existing = merged.get(id)
+                    if(!existing || event.versionTime >= existing.versionTime) merged.set(id, event)
+                }
+            }
+            this.history.usgsEqlist = [...merged.values()]
+                .sort((a, b) => b.originTimeStamp - a.originTimeStamp || b.id.localeCompare(a.id))
+                .map(event => {
+                    const message = createUsgsMessage(event)
+                    return {
+                        ...message, source: 'USGS', depth: event.depth, magnitude: event.magnitude,
+                        hypocenter: (event.reviewType.toLowerCase() === 'reviewed' ? '' : '(A)') + message.hypocenter,
+                    }
+                })
+            if(prune) {
+                for(const id of this.usgsRealtimeCache.keys()) {
+                    if(!merged.has(id)) this.usgsRealtimeCache.delete(id)
+                }
+            }
+        },
+        async fetchUsgsReports(stamp = Date.now()) {
+            const requestId = ++this.usgsHttpRequestId
+            const data = await Http.get(eqUrls.usgsEqlist_http + `?time=${stamp}`)
+            if(requestId !== this.usgsHttpRequestId || !this.isApiEnabled('usgsEqlist', 'usgs') || !Array.isArray(data?.features)) return
+            if(data.features.length > 0) this.setEqMessage('usgsEqlist', data.features[0], 'usgs')
+            this.setHistory('usgsEqlist', data.features, 'usgs')
+        },
+        setEqMessage(source, data, provider) {
             try{
-                const eqMessage = this.eqMessage[source]
-                const oldType = eqMessage.type
-                eqMessage.source = source
-                eqMessage.type = type
+                const type = getSourceType(source, provider)
+                if(type === undefined || !Object.hasOwn(this.eqMessage, source)) {
+                    console.warn('Unknown earthquake source/provider:', source, provider)
+                    return
+                }
+                // Rejected USGS messages must not mutate even the displayed provider/type.
+                if(source === 'usgsEqlist') {
+                    this.setUsgsEqMessage(data, provider, type)
+                    return
+                }
+                if(provider === 'lipo' && lipoSourceTypes[source]) {
+                    data = {
+                        ...data,
+                        epicenter: data.epicenter || '',
+                        originTime: data.originTime || '',
+                        reportTime: data.reportTime || '',
+                        latitude: data.latitude ?? null,
+                        longitude: data.longitude ?? null,
+                    }
+                }
+                const eqMessage = { ...this.eqMessage[source] }
                 switch(source){
                     case 'jmaEew':{
                         eqMessage.isEew = true
                         eqMessage.timeZone = 9
                         eqMessage.useShindo = true
                         eqMessage.intTitle = '推定最大震度'
-                        switch(type) {
-                            case 0: {
+                        switch(provider) {
+                            case 'wolfx': {
                                 const trainingText = data.isTraining ? '訓練·' : ''
                                 eqMessage.id = data.EventID
                                 eqMessage.isCanceled = data.isCancel
@@ -354,74 +416,37 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.hypocenterText = '震源地: ' + eqMessage.hypocenter
                                 break
                             }
-                            case 1: {
-                                const trainingText = data.training ? '訓練·' : ''
-                                eqMessage.id = data.id
-                                eqMessage.isCanceled = data.cancel
-                                eqMessage.reportNum = data.updates
-                                eqMessage.reportTime = data.createTime
+                            case 'lipo': {
+                                const infoTypeName = data.isWarn === true ? '警報' : data.isWarn === false ? '予報' : '不明'
+                                const trainingText = data.isTraining ? '訓練·' : ''
+                                eqMessage.id = data.eventId
+                                eqMessage.isCanceled = Boolean(data.isCanceled)
+                                eqMessage.reportNum = data.reportNum
+                                eqMessage.reportTime = data.reportTime || data.originTime || ''
                                 eqMessage.isAssumption = false
-                                eqMessage.isWarn = data.infoTypeName == '警報'
-                                eqMessage.isFinal = data.final
-                                eqMessage.title = trainingText + `緊急地震速報（${data.infoTypeName}）`
-                                eqMessage.lat = data.latitude
-                                eqMessage.lng = data.longitude
-                                eqMessage.depth = data.depth
-                                eqMessage.depthText = '深さ: ' + data.depth + 'km'
-                                eqMessage.originTime = data.shockTime
+                                eqMessage.isWarn = infoTypeName == '警報'
+                                eqMessage.isFinal = Boolean(data.isFinal)
+                                eqMessage.title = trainingText + `緊急地震速報（${infoTypeName}）`
+                                eqMessage.lat = data.latitude ?? null
+                                eqMessage.lng = data.longitude ?? null
+                                eqMessage.depth = data.depth ?? -1
+                                eqMessage.depthText = '深さ: ' + (data.depth == null ? '不明' : data.depth + 'km')
+                                eqMessage.originTime = data.originTime || ''
                                 eqMessage.originTimeText = '発震時刻: ' + eqMessage.originTime + ' (JST)'
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = 'マグニチュード: ' + eqMessage.magnitude.toFixed(1)
-                                eqMessage.maxIntensity = data.epiIntensity
-                                if(data.cancel){
+                                eqMessage.magnitude = data.magnitude ?? -1
+                                eqMessage.magnitudeText = 'マグニチュード: ' + formatLipoNumber(data.magnitude, 1)
+                                eqMessage.maxIntensity = data.maxIntensity || '不明'
+                                if(data.isCanceled){
                                     eqMessage.reportNumText = 'キャンセル報'
                                     eqMessage.titleText = trainingText + '緊急地震速報（取消）'
                                     eqMessage.hypocenter = trainingText + '取り消されました'
                                     eqMessage.maxIntensityText = '推定最大震度: なし'
                                 }
                                 else{
-                                    eqMessage.reportNumText = '第' + data.updates + '報' + (data.final ? '（最終）' : '')
-                                    eqMessage.titleText = trainingText + `緊急地震速報（${data.infoTypeName}）`
-                                    eqMessage.hypocenter = trainingText + data.placeName
-                                    eqMessage.maxIntensityText = '推定最大震度: ' + data.epiIntensity
-                                }
-                                eqMessage.hypocenterText = '震源地: ' + eqMessage.hypocenter
-                                eqMessage.warnArea = '[]'
-                                break
-                            }
-                            case 2: {
-                                const trainingText = data.is_training ? '訓練·' : ''
-                                eqMessage.id = data.report_id
-                                eqMessage.isCanceled = data.is_cancel
-                                eqMessage.reportNum = Number(data.report_num)
-                                eqMessage.reportTime = data.report_time.replace(/\//g, '-')
-                                eqMessage.isAssumption = false
-                                eqMessage.isWarn = data.alertflg == '警報'
-                                eqMessage.isFinal = data.is_final
-                                eqMessage.title = trainingText + `緊急地震速報（${data.alertflg}）`
-                                eqMessage.lat = Number(data.latitude)
-                                eqMessage.lng = Number(data.longitude)
-                                eqMessage.depth = Number(data.depth.replace('km', ''))
-                                eqMessage.depthText = '深さ: ' + data.depth
-                                eqMessage.originTime = data.origin_time.replace(
-                                    /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/,
-                                    '$1-$2-$3 $4:$5:$6'
-                                )
-                                eqMessage.originTimeText = '発震時刻: ' + eqMessage.originTime + ' (JST)'
-                                eqMessage.magnitude = Number(data.magunitude)
-                                eqMessage.magnitudeText = 'マグニチュード: ' + eqMessage.magnitude.toFixed(1)
-                                eqMessage.maxIntensity = data.calcintensity
-                                if(data.is_cancel){
-                                    eqMessage.reportNumText = 'キャンセル報'
-                                    eqMessage.titleText = trainingText + '緊急地震速報（取消）'
-                                    eqMessage.hypocenter = trainingText + '取り消されました'
-                                    eqMessage.maxIntensityText = '推定最大震度: なし'
-                                }
-                                else{
-                                    eqMessage.reportNumText = '第' + data.report_num + '報' + (data.is_final ? '（最終）' : '')
-                                    eqMessage.titleText = trainingText + `緊急地震速報（${data.alertflg}）`
-                                    eqMessage.hypocenter = trainingText + data.region_name
-                                    eqMessage.maxIntensityText = '推定最大震度: ' + data.calcintensity
+                                    eqMessage.reportNumText = '第' + data.reportNum + '報' + (data.isFinal ? '（最終）' : '')
+                                    eqMessage.titleText = trainingText + `緊急地震速報（${infoTypeName}）`
+                                    eqMessage.hypocenter = trainingText + (data.epicenter || '不明')
+                                    eqMessage.maxIntensityText = '推定最大震度: ' + eqMessage.maxIntensity
                                 }
                                 eqMessage.hypocenterText = '震源地: ' + eqMessage.hypocenter
                                 eqMessage.warnArea = '[]'
@@ -434,8 +459,8 @@ export const useStatusStore = defineStore('statusStore', {
                         eqMessage.isEew = true
                         eqMessage.useShindo = true
                         eqMessage.intTitle = '預估最大震度'
-                        switch(type) {
-                            case 0:
+                        switch(provider) {
+                            case 'wolfx':
                                 eqMessage.id = data.ID
                                 eqMessage.reportNum = data.ReportNum
                                 eqMessage.reportNumText = '第' + data.ReportNum + '報'
@@ -456,37 +481,12 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.maxIntensityText = '預估最大震度: ' + eqMessage.maxIntensity
                                 eqMessage.isWarn = getShindoRank(eqMessage.maxIntensity) >= 5
                                 break
-                            case 1:
-                                if(data.id == eqMessage.id && oldType == 0) {
-                                    eqMessage.type = oldType
-                                    break
-                                }
-                                eqMessage.id = data.id
-                                eqMessage.reportNum = data.updates
-                                eqMessage.reportNumText = '第' + data.updates + '報'
-                                eqMessage.reportTime = data.createTime || data.shockTime
-                                eqMessage.isCanceled = false
-                                eqMessage.titleText = '中央氣象署強震即時警報'
-                                eqMessage.hypocenter = data.placeName?.replace(/ 外海 \([^)]*\)/g, "外海") || getFEName(data.latitude, data.longitude)
-                                eqMessage.hypocenterText = '震央: ' + eqMessage.hypocenter
-                                eqMessage.lat = data.latitude
-                                eqMessage.lng = data.longitude
-                                eqMessage.depth = data.depth
-                                eqMessage.depthText = '深度: ' + data.depth + 'km'
-                                eqMessage.originTime = data.shockTime
-                                eqMessage.originTimeText = '時間: ' + eqMessage.originTime
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = '規模: ' + eqMessage.magnitude.toFixed(1)
-                                eqMessage.maxIntensity = formatShindo(data.maxIntensity, false) || '不明'
-                                eqMessage.maxIntensityText = '預估最大震度: ' + eqMessage.maxIntensity
-                                eqMessage.isWarn = getShindoRank(eqMessage.maxIntensity) >= 5
-                                break
                         }
                         break
                     }
                     case 'ceaEew':{
-                        switch(type) {
-                            case 0:
+                        switch(provider) {
+                            case 'wolfx':
                                 eqMessage.id = data.EventID
                                 eqMessage.isEew = true
                                 eqMessage.reportNum = data.ReportNum
@@ -507,24 +507,24 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
                                 eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
                                 break
-                            case 1:
+                            case 'lipo':
                                 eqMessage.id = data.eventId
                                 eqMessage.isEew = true
-                                eqMessage.reportNum = data.updates
-                                eqMessage.reportNumText = '第' + data.updates + '报'
-                                eqMessage.reportTime = data.updateTime || data.shockTime
+                                eqMessage.reportNum = data.reportNum
+                                eqMessage.reportNumText = '第' + data.reportNum + '报'
+                                eqMessage.reportTime = data.originTime
                                 eqMessage.titleText = '中国地震局地震预警'
-                                eqMessage.hypocenter = data.placeName
-                                eqMessage.hypocenterText = '震中: ' + data.placeName
+                                eqMessage.hypocenter = data.epicenter
+                                eqMessage.hypocenterText = '震中: ' + data.epicenter
                                 eqMessage.lat = data.latitude
                                 eqMessage.lng = data.longitude
                                 eqMessage.depth = data.depth ?? 10
                                 eqMessage.depthText = '深度: ' + (data.depth == null ? '不明' : data.depth + 'km')
-                                eqMessage.originTime = data.shockTime
+                                eqMessage.originTime = data.originTime
                                 eqMessage.originTimeText = '发震时间: ' + eqMessage.originTime
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = '震级: ' + eqMessage.magnitude.toFixed(1)
-                                eqMessage.maxIntensity = data.epiIntensity ? data.epiIntensity.toFixed(0) : calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
+                                eqMessage.magnitude = data.magnitude ?? -1
+                                eqMessage.magnitudeText = '震级: ' + formatLipoNumber(data.magnitude, 1)
+                                eqMessage.maxIntensity = data.maxIntensity ? data.maxIntensity.toFixed(0) : calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
                                 eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
                                 eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
                                 break
@@ -532,119 +532,25 @@ export const useStatusStore = defineStore('statusStore', {
                         break
                     }
                     case 'iclEew':{
-                        switch(type) {
-                            case 1:
+                        switch(provider) {
+                            case 'lipo':
                                 eqMessage.id = data.eventId
                                 eqMessage.isEew = true
-                                eqMessage.reportNum = data.updates
-                                eqMessage.reportNumText = '第' + data.updates + '报'
-                                eqMessage.reportTime = data.updateTime
+                                eqMessage.reportNum = data.reportNum
+                                eqMessage.reportNumText = '第' + data.reportNum + '报'
+                                eqMessage.reportTime = data.reportTime
                                 eqMessage.titleText = '成都高新减灾研究所地震预警'
-                                eqMessage.hypocenter = data.placeName
-                                eqMessage.hypocenterText = '震中: ' + data.placeName
+                                eqMessage.hypocenter = data.epicenter
+                                eqMessage.hypocenterText = '震中: ' + data.epicenter
                                 eqMessage.lat = data.latitude
                                 eqMessage.lng = data.longitude
                                 eqMessage.depth = data.depth || 10
                                 eqMessage.depthText = '深度: ' + (data.depth ? data.depth.toFixed(0) + 'km' : '不明')
-                                eqMessage.originTime = data.shockTime
+                                eqMessage.originTime = data.originTime
                                 eqMessage.originTimeText = '发震时间: ' + eqMessage.originTime
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = '震级: ' + eqMessage.magnitude.toFixed(1)
-                                eqMessage.maxIntensity = data.epiIntensity ? data.epiIntensity.toFixed(0) : calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
-                                eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
-                                eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
-                                break
-                        }
-                        break
-                    }
-                    case 'scEew':{
-                        switch(type) {
-                            case 0:
-                                eqMessage.id = data.EventID.split('_')[0]
-                                eqMessage.isEew = true
-                                eqMessage.reportNum = data.ReportNum
-                                eqMessage.reportNumText = '第' + data.ReportNum + '报'
-                                eqMessage.reportTime = data.ReportTime
-                                eqMessage.titleText = '四川地震局地震预警'
-                                eqMessage.hypocenter = data.HypoCenter
-                                eqMessage.hypocenterText = '震中: ' + data.HypoCenter
-                                eqMessage.lat = data.Latitude
-                                eqMessage.lng = data.Longitude
-                                eqMessage.depth = data.Depth || 10
-                                eqMessage.depthText = '深度: ' + (data.Depth ? data.Depth + 'km' : '不明')
-                                eqMessage.originTime = data.OriginTime
-                                eqMessage.originTimeText = '发震时间: ' + data.OriginTime
-                                eqMessage.magnitude = data.Magunitude
-                                eqMessage.magnitudeText = '震级: ' + data.Magunitude.toFixed(1)
-                                eqMessage.maxIntensity = data.MaxIntensity ? data.MaxIntensity.toFixed(0) : calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
-                                eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
-                                eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
-                                break
-                            case 1:
-                                eqMessage.id = data.eventId.split('_')[0]
-                                eqMessage.isEew = true
-                                eqMessage.reportNum = data.updates
-                                eqMessage.reportNumText = '第' + eqMessage.reportNum + '报'
-                                eqMessage.reportTime = data.createTime
-                                eqMessage.titleText = '四川地震局地震预警'
-                                eqMessage.hypocenter = data.placeName
-                                eqMessage.hypocenterText = '震中: ' + data.placeName
-                                eqMessage.lat = data.latitude
-                                eqMessage.lng = data.longitude
-                                eqMessage.depth = 10
-                                eqMessage.depthText = '深度: 不明'
-                                eqMessage.originTime = data.shockTime
-                                eqMessage.originTimeText = '发震时间: ' + data.shockTime
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = '震级: ' + eqMessage.magnitude.toFixed(1)
-                                eqMessage.maxIntensity = data.epiIntensity ? data.epiIntensity.toFixed(0) : calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
-                                eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
-                                eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
-                                break
-                        }
-                        break
-                    }
-                    case 'fjEew':{
-                        switch(type) {
-                            case 0:
-                                eqMessage.id = data.EventID.split('_')[0]
-                                eqMessage.isEew = true
-                                eqMessage.reportNum = data.ReportNum
-                                eqMessage.reportNumText = '第' + data.ReportNum + '报'
-                                eqMessage.reportTime = data.ReportTime
-                                eqMessage.titleText = '福建地震局地震预警'
-                                eqMessage.hypocenter = data.HypoCenter
-                                eqMessage.hypocenterText = '震中: ' + data.HypoCenter
-                                eqMessage.lat = data.Latitude
-                                eqMessage.lng = data.Longitude
-                                eqMessage.depth = 10
-                                eqMessage.depthText = '深度: 不明'
-                                eqMessage.originTime = data.OriginTime
-                                eqMessage.originTimeText = '发震时间: ' + data.OriginTime
-                                eqMessage.magnitude = data.Magunitude
-                                eqMessage.magnitudeText = '震级: ' + data.Magunitude.toFixed(1)
-                                eqMessage.maxIntensity = calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
-                                eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
-                                eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
-                                break
-                            case 1:
-                                eqMessage.id = data.eventId.split('_')[0]
-                                eqMessage.isEew = true
-                                eqMessage.reportNum = data.updates
-                                eqMessage.reportNumText = '第' + eqMessage.reportNum + '报'
-                                eqMessage.reportTime = data.sendtime.slice(0, 19)
-                                eqMessage.titleText = '福建地震局地震预警'
-                                eqMessage.hypocenter = data.placeName
-                                eqMessage.hypocenterText = '震中: ' + data.placeName
-                                eqMessage.lat = data.latitude
-                                eqMessage.lng = data.longitude
-                                eqMessage.depth = 10
-                                eqMessage.depthText = '深度: 不明'
-                                eqMessage.originTime = data.shockTime.slice(0, 19)
-                                eqMessage.originTimeText = '发震时间: ' + eqMessage.originTime
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = '震级: ' + data.magnitude.toFixed(1)
-                                eqMessage.maxIntensity = calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
+                                eqMessage.magnitude = data.magnitude ?? -1
+                                eqMessage.magnitudeText = '震级: ' + formatLipoNumber(data.magnitude, 1)
+                                eqMessage.maxIntensity = data.maxIntensity ? data.maxIntensity.toFixed(0) : calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
                                 eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
                                 eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
                                 break
@@ -652,24 +558,25 @@ export const useStatusStore = defineStore('statusStore', {
                         break
                     }
                     case 'kmaEew': {
-                        eqMessage.id = data.id
+                        eqMessage.id = data.eventId
+                        eqMessage.timeZone = 9
                         eqMessage.isEew = true
                         eqMessage.intTitle = '최대예상진도'
-                        eqMessage.reportNum = data.updates || 1
+                        eqMessage.reportNum = data.reportNum || 1
                         eqMessage.reportNumText = '제' + eqMessage.reportNum + '보'
-                        eqMessage.reportTime = data.createTime
+                        eqMessage.reportTime = data.reportTime
                         eqMessage.titleText = '기상청 지진 조기 경보'
-                        eqMessage.hypocenter = data.placeName
-                        eqMessage.hypocenterText = '위치: ' + data.placeName
+                        eqMessage.hypocenter = data.epicenter
+                        eqMessage.hypocenterText = '위치: ' + data.epicenter
                         eqMessage.lat = data.latitude
                         eqMessage.lng = data.longitude
                         eqMessage.depth = data.depth || 10
                         eqMessage.depthText = '깊이: ' + (data.depth ? data.depth + 'km' : '불명')
-                        eqMessage.originTime = data.shockTime
+                        eqMessage.originTime = data.originTime
                         eqMessage.originTimeText = '발생시각: ' + eqMessage.originTime
-                        eqMessage.magnitude = data.magnitude
-                        eqMessage.magnitudeText = '규모: ' + eqMessage.magnitude.toFixed(1)
-                        eqMessage.maxIntensity = data.epiIntensity.toFixed(0)
+                        eqMessage.magnitude = data.magnitude ?? -1
+                        eqMessage.magnitudeText = '규모: ' + formatLipoNumber(data.magnitude, 1, '불명')
+                        eqMessage.maxIntensity = formatLipoNumber(data.maxIntensity, 0, '')
                         eqMessage.maxIntensityText = '최대예상진도: ' + eqMessage.maxIntensity
                         eqMessage.isWarn = Number(eqMessage.maxIntensity) >= 6.5
                         break
@@ -677,10 +584,11 @@ export const useStatusStore = defineStore('statusStore', {
                     case 'gqEew':{
                         const isNewEvent = eqMessage.id != data.Id
                         eqMessage.id = data.Id
-                        eqMessage.type = data.Quality?.QualityLevel ?? 9
                         eqMessage.isEew = true
                         eqMessage.timeZone = systemTimeZone
                         eqMessage.isCanceled = data.RevisionId < 0
+                        eqMessage.quality = data.Quality?.QualityLevel
+                            ?? (eqMessage.isCanceled && !isNewEvent ? eqMessage.quality : 9)
                         if(!eqMessage.isCanceled || isNewEvent) {
                             eqMessage.reportNum = eqMessage.isCanceled ? Infinity : data.RevisionId
                             eqMessage.titleText = 'GlobalQuake地震预警'
@@ -822,22 +730,23 @@ export const useStatusStore = defineStore('statusStore', {
                     case 'cwaEqlist':{
                         eqMessage.useShindo = true
                         eqMessage.titleText = '中央氣象署地震報告'
-                        switch(type) {
-                            case 1: {
-                                eqMessage.id = data.id
-                                eqMessage.reportTime = dayjs(data.shockTime, 'YYYY-MM-DD HH:mm:ss').add(5, 'minutes').format('YYYY-MM-DD HH:mm:ss')
-                                const start = data.placeName.indexOf('(位於')
-                                const end = data.placeName.indexOf(')')
-                                eqMessage.hypocenter = start == -1 || end == -1 || start + 3 >= end ? data.placeName : data.placeName.slice(start + 3, end)
+                        switch(provider) {
+                            case 'lipo': {
+                                eqMessage.id = data.eventId
+                                eqMessage.reportTime = data.reportTime || data.originTime
+                                const placeName = data.epicenter || ''
+                                const start = placeName.indexOf('(位於')
+                                const end = placeName.indexOf(')')
+                                eqMessage.hypocenter = start == -1 || end == -1 || start + 3 >= end ? placeName : placeName.slice(start + 3, end)
                                 eqMessage.hypocenterText = '震央: ' + eqMessage.hypocenter
                                 eqMessage.lat = data.latitude
                                 eqMessage.lng = data.longitude
-                                eqMessage.depth = data.depth
-                                eqMessage.depthText = '深度: ' + data.depth.toFixed(0) + 'km'
-                                eqMessage.originTime = data.shockTime
+                                eqMessage.depth = data.depth ?? -1
+                                eqMessage.depthText = '深度: ' + formatLipoNumber(data.depth, 0) + 'km'
+                                eqMessage.originTime = data.originTime
                                 eqMessage.originTimeText = '時間: ' + eqMessage.originTime
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = '規模: ' + data.magnitude.toFixed(1)
+                                eqMessage.magnitude = data.magnitude ?? -1
+                                eqMessage.magnitudeText = '規模: ' + formatLipoNumber(data.magnitude, 1)
                                 eqMessage.maxIntensity = data.maxIntensity?.replace('級', '') || '不明'
                                 eqMessage.maxIntensityText = '最大震度: ' + eqMessage.maxIntensity
                                 break
@@ -846,13 +755,14 @@ export const useStatusStore = defineStore('statusStore', {
                         break
                     }
                     case 'cencEqlist':{
-                        switch(type) {
-                            case 0: 
+                        switch(provider) {
+                            case 'wolfx':
                                 if(calcTimeDiff(data.No1.ReportTime, 8, eqMessage.reportTime, 8) < 30000)
-                                    break
+                                    return
                                 eqMessage.id = data.No1.EventID
                                 eqMessage.reportTime = data.No1.ReportTime
-                                eqMessage.title = `中国地震台网${data.No1.type == 'reviewed' ? '正式' : '自动'}测定`
+                                eqMessage.reviewType = data.No1.type
+                                eqMessage.title = `中国地震台网${eqMessage.reviewType === 'reviewed' ? '正式' : '自动'}测定`
                                 eqMessage.titleText = eqMessage.title
                                 eqMessage.hypocenter = data.No1.placeName
                                 eqMessage.hypocenterText = '震中: ' + data.No1.placeName
@@ -867,24 +777,24 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.maxIntensity = calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
                                 eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
                                 break
-                            case 1:
-                                if(calcTimeDiff(data.createTime, 8, eqMessage.reportTime, 8) < 30000)
-                                    break
+                            case 'lipo':
+                                if(calcTimeDiff((data.reportTime || data.originTime), 8, eqMessage.reportTime, 8) < 30000)
+                                    return
                                 eqMessage.id = data.eventId
-                                eqMessage.reportTime = data.createTime
-                                const cedingIndex = data.infoTypeName.indexOf('测定')
-                                eqMessage.title = `中国地震台网${data.infoTypeName.slice(cedingIndex - 2, cedingIndex)}测定`
+                                eqMessage.reportTime = (data.reportTime || data.originTime)
+                                eqMessage.reviewType = data.reviewType
+                                eqMessage.title = `中国地震台网${eqMessage.reviewType === 'reviewed' ? '正式' : '自动'}测定`
                                 eqMessage.titleText = eqMessage.title
-                                eqMessage.hypocenter = data.placeName
-                                eqMessage.hypocenterText = '震中: ' + data.placeName
+                                eqMessage.hypocenter = data.epicenter
+                                eqMessage.hypocenterText = '震中: ' + data.epicenter
                                 eqMessage.lat = data.latitude
                                 eqMessage.lng = data.longitude
-                                eqMessage.depth = data.depth
-                                eqMessage.depthText = '深度: ' + data.depth + 'km'
-                                eqMessage.originTime = data.shockTime
-                                eqMessage.originTimeText = '发震时间: ' + data.shockTime
-                                eqMessage.magnitude = data.magnitude
-                                eqMessage.magnitudeText = '震级: ' + data.magnitude.toFixed(1)
+                                eqMessage.depth = data.depth ?? -1
+                                eqMessage.depthText = '深度: ' + (data.depth == null ? '不明' : data.depth + 'km')
+                                eqMessage.originTime = data.originTime
+                                eqMessage.originTimeText = '发震时间: ' + data.originTime
+                                eqMessage.magnitude = data.magnitude ?? -1
+                                eqMessage.magnitudeText = '震级: ' + formatLipoNumber(data.magnitude, 1)
                                 eqMessage.maxIntensity = calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
                                 eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
                                 break
@@ -894,112 +804,27 @@ export const useStatusStore = defineStore('statusStore', {
                     case 'kmaEqlist':{
                         eqMessage.timeZone = 9
                         eqMessage.intTitle = '최대진도'
-                        eqMessage.id = data.id
-                        eqMessage.reportTime = data.createTime
+                        eqMessage.id = data.eventId
+                        eqMessage.reportTime = data.reportTime
                         eqMessage.title = '기상청 지진 정보'
                         eqMessage.titleText = eqMessage.title
-                        eqMessage.hypocenter = data.placeName
-                        eqMessage.hypocenterText = '위치: ' + data.placeName
+                        eqMessage.hypocenter = data.epicenter
+                        eqMessage.hypocenterText = '위치: ' + data.epicenter
                         eqMessage.lat = data.latitude
                         eqMessage.lng = data.longitude
-                        eqMessage.depth = data.depth || 10
-                        eqMessage.depthText = '깊이: ' + (data.depth ? data.depth + 'km' : '불명')
-                        eqMessage.originTime = data.shockTime
+                        eqMessage.depth = data.depth ?? 10
+                        eqMessage.depthText = '깊이: ' + (data.depth != null ? data.depth + 'km' : '불명')
+                        eqMessage.originTime = data.originTime
                         eqMessage.originTimeText = '발생시각: ' + eqMessage.originTime
-                        eqMessage.magnitude = data.magnitude
-                        eqMessage.magnitudeText = '규모: ' + data.magnitude.toFixed(1)
-                        eqMessage.maxIntensity = data.epiIntensity?.toFixed(0) || '불명'
+                        eqMessage.magnitude = data.magnitude ?? -1
+                        eqMessage.magnitudeText = '규모: ' + formatLipoNumber(data.magnitude, 1, '불명')
+                        eqMessage.maxIntensity = formatLipoNumber(data.maxIntensity, 0, '')
                         eqMessage.maxIntensityText = '최대진도: ' + eqMessage.maxIntensity
-                        break
-                    }
-                    case 'usgsEqlist': {
-                        const tempMsg = {}
-                        eqMessage.timeZone = systemTimeZone
-                        switch(type) {
-                            case 0:
-                                const { geometry, properties } = data
-                                const [lng, lat, depth] = geometry.coordinates
-                                tempMsg.id = properties.code
-                                tempMsg.title = 'USGS' + (properties.status.toLowerCase() == 'reviewed' ? '正式' : '自动') + '测定'
-                                tempMsg.titleText = tempMsg.title
-                                tempMsg.hypocenter = getFEName(lat, lng) || properties.place
-                                tempMsg.hypocenterText = '震中: ' + tempMsg.hypocenter
-                                tempMsg.lat = lat
-                                tempMsg.lng = lng
-                                tempMsg.depth = depth
-                                tempMsg.depthText = '深度: ' + tempMsg.depth.toFixed(0) + 'km'
-                                tempMsg.originTime = stampToTime(properties.time, systemTimeZone)
-                                tempMsg.originTimeText = '发震时间: ' + tempMsg.originTime
-                                tempMsg.magnitude = properties.mag
-                                tempMsg.magnitudeText = '震级: ' + tempMsg.magnitude.toFixed(1)
-                                tempMsg.maxIntensity = calcCsisLevel(tempMsg.magnitude, tempMsg.depth, 0)
-                                tempMsg.maxIntensityText = '预估最大烈度: ' + tempMsg.maxIntensity
-                                if(isEqual(tempMsg, usgsCache))
-                                    break
-                                usgsCache = tempMsg
-                                Object.assign(eqMessage, tempMsg)
-                                eqMessage.reportTime = stampToTime(properties.updated, systemTimeZone)
-                                break
-                            case 1:
-                                tempMsg.id = data.id
-                                tempMsg.title = 'USGS' + (data.infoTypeName.toLowerCase() == 'reviewed' ? '正式' : '自动') + '测定'
-                                tempMsg.titleText = tempMsg.title
-                                tempMsg.hypocenter = getFEName(data.latitude, data.longitude) || data.placeName
-                                tempMsg.hypocenterText = '震中: ' + tempMsg.hypocenter
-                                tempMsg.lat = data.latitude
-                                tempMsg.lng = data.longitude
-                                tempMsg.depth = data.depth
-                                tempMsg.depthText = '深度: ' + tempMsg.depth.toFixed(0) + 'km'
-                                tempMsg.originTime = convertTimeString(data.shockTime, 8)
-                                tempMsg.originTimeText = '发震时间: ' + tempMsg.originTime
-                                tempMsg.magnitude = data.magnitude
-                                tempMsg.magnitudeText = '震级: ' + tempMsg.magnitude.toFixed(1)
-                                tempMsg.maxIntensity = calcCsisLevel(tempMsg.magnitude, tempMsg.depth, 0)
-                                tempMsg.maxIntensityText = '预估最大烈度: ' + tempMsg.maxIntensity
-                                if(isEqual(tempMsg, usgsCache))
-                                    break
-                                usgsCache = tempMsg
-                                Object.assign(eqMessage, tempMsg)
-                                eqMessage.reportTime = convertTimeString(data.updateTime, 8)
-                                break
-                        }
-                        break
-                    }
-                    case 'fssnEqlist': {
-                        eqMessage.id = data.id
-                        eqMessage.timeZone = systemTimeZone
-                        eqMessage.reportTime = convertTimeString(data.createTime, 8)
-                        let infoType
-                        switch(data.infoTypeName) {
-                            case '已确认':
-                                infoType = '自动'
-                                break
-                            case '正式(已核实)':
-                                infoType = '正式'
-                                break
-                            default:
-                                infoType = data.infoTypeName
-                                break
-                        }
-                        eqMessage.isCanceled = infoType == '取消'
-                        eqMessage.title = `FSSN${infoType}测定`
-                        eqMessage.titleText = eqMessage.title
-                        eqMessage.hypocenter = getFEName(data.latitude, data.longitude) || data.placeName_zh || data.placeName
-                        eqMessage.hypocenterText = '震中: ' + eqMessage.hypocenter
-                        eqMessage.lat = data.latitude
-                        eqMessage.lng = data.longitude
-                        eqMessage.depth = data.depth
-                        eqMessage.depthText = '深度: ' + eqMessage.depth.toFixed(0) + 'km'
-                        eqMessage.originTime = convertTimeString(data.shockTime, 8)
-                        eqMessage.originTimeText = '发震时间: ' + eqMessage.originTime
-                        eqMessage.magnitude = data.magnitude || -1
-                        eqMessage.magnitudeText = '震级: ' + (eqMessage.magnitude == -1 ? '不明' : eqMessage.magnitude.toFixed(1))
-                        eqMessage.maxIntensity = eqMessage.magnitude == -1 ? '不明' : calcCsisLevel(eqMessage.magnitude, eqMessage.depth, 0)
-                        eqMessage.maxIntensityText = '预估最大烈度: ' + eqMessage.maxIntensity
                         break
                     }
                 }
                 eqMessage.className = setClassName(eqMessage.maxIntensity, eqMessage.useShindo, eqMessage.isCanceled)
+                Object.assign(this.eqMessage[source], eqMessage, { source, type })
             } catch(err) {
                 console.log(err);
             }
@@ -1071,9 +896,10 @@ export const useStatusStore = defineStore('statusStore', {
                         break
                     }
                     case 'nmefcTsunami': {
-                        const reportTime = data.timeInfo.updateDate
+                        const reportTime = data.timeInfo.issueTime
+                        if(!reportTime) break
                         if(!tsunamiMessage.reportTime || calcTimeDiff(reportTime, 8, tsunamiMessage.reportTime, 8) > 0) {
-                            tsunamiMessage.id = data.timeInfo.updateDate.replace(/[^0-9]/g, '')
+                            tsunamiMessage.id = data.reportId
                             tsunamiMessage.reportTime = reportTime
                             switch(data.warningInfo.level) {
                                 case '黄色':
@@ -1141,6 +967,10 @@ export const useStatusStore = defineStore('statusStore', {
             }
         },
         setHistory(source, data, api = '') {
+            if(source === 'usgsEqlist') {
+                this.replaceUsgsHistory(data, api === 'lipo' ? 'lipo' : 'usgs')
+                return
+            }
             const list = []
             let keys
             switch (source) {
@@ -1148,7 +978,7 @@ export const useStatusStore = defineStore('statusStore', {
                     keys = Object.keys(data).filter(key => /^No\d+$/.test(key))
                     break
                 case 'cencEqlist':
-                    keys = api == 'fan' ? Object.keys(data) : Object.keys(data).filter(key => /^No\d+$/.test(key))
+                    keys = api == 'lipo' ? Object.keys(data) : Object.keys(data).filter(key => /^No\d+$/.test(key))
                     break
                 default:
                     keys = Object.keys(data)
@@ -1178,46 +1008,48 @@ export const useStatusStore = defineStore('statusStore', {
                         break
                     }
                     case 'cwaEqlist': {
-                        const placeName = data[i].placeName
+                        const placeName = data[i].epicenter || ''
                         const locStart = placeName.indexOf('(位於')
                         const locEnd = placeName.indexOf(')')
                         const hypocenter = locStart == -1 || locEnd == -1 || locStart + 3 >= locEnd ? placeName : placeName.slice(locStart + 3, locEnd)
                         const maxIntensity = formatShindo(data[i].maxIntensity)
                         list[i] = {
                             source: 'CWA',
-                            id: `${data[i].id}${dayjs.utc(data[i].shockTime, 'YYYY-MM-DD HH:mm:ss').format('YYYYMMDDHHmmss')}`,
+                            id: data[i].eventId,
                             timeZone: 8,
                             useShindo: true,
-                            originTime: data[i].shockTime,
-                            lat: data[i].latitude,
-                            lng: data[i].longitude,
+                            originTime: data[i].originTime,
+                            lat: data[i].latitude ?? null,
+                            lng: data[i].longitude ?? null,
                             hypocenter,
-                            depth: data[i].depth,
-                            magnitude: data[i].magnitude,
+                            depth: data[i].depth ?? -1,
+                            magnitude: data[i].magnitude ?? -1,
                             maxIntensity,
                             className: setClassName(maxIntensity, true),
-                            url: 'https://scweb.cwa.gov.tw/zh-tw/earthquake/data'
+                            url: data[i].url
                         }
                         break
                     }
                     case 'cencEqlist': {
                         const item = data[keys[i]]
-                        const isFan = api == 'fan'
-                        const originTime = isFan ? item.shockTime : item.time
-                        const isReviewed = isFan ? item.infoTypeName.includes('正式') : item.type == 'reviewed'
-                        const depth = Number(item.depth)
-                        const magnitude = Number(item.magnitude)
+                        const isLipo = api == 'lipo'
+                        const originTime = isLipo ? item.originTime : item.time
+                        const reviewType = isLipo ? item.reviewType : item.type
+                        const isReviewed = reviewType === 'reviewed'
+                        const depth = isLipo ? item.depth ?? -1 : Number(item.depth)
+                        const magnitude = isLipo ? item.magnitude ?? -1 : Number(item.magnitude)
                         const maxIntensity = calcCsisLevel(magnitude, depth)
                         const intReportId = originTime.replace(/[^\d]/g, '')
                         list[i] = {
                             source: 'CENC',
-                            id: isFan ? item.id : item.EventID,
+                            id: isLipo ? item.eventId : item.EventID,
+                            reviewType,
                             timeZone: 8,
                             useShindo: false,
                             originTime,
-                            lat: Number(item.latitude),
-                            lng: Number(item.longitude),
-                            hypocenter: (isReviewed ? '' : '(A)') + item.placeName,
+                            lat: isLipo ? item.latitude ?? null : Number(item.latitude),
+                            lng: isLipo ? item.longitude ?? null : Number(item.longitude),
+                            hypocenter: (isReviewed ? '' : '(A)') + (isLipo ? item.epicenter || '' : item.placeName),
                             depth,
                             magnitude,
                             maxIntensity,
@@ -1227,85 +1059,44 @@ export const useStatusStore = defineStore('statusStore', {
                         }
                         break
                     }
-                    case 'usgsEqlist': {
-                        const feature = data[i]
-                        const { properties, geometry } = feature
-                        const [lng, lat, depth] = geometry.coordinates
-                        const magnitude = properties.mag
-                        const maxIntensity = calcCsisLevel(magnitude, depth)
+                    case 'kmaEqlist': {
+                        const item = data[i]
+                        const maxIntensity = Number.isFinite(item.maxIntensity) ? String(item.maxIntensity) : ''
                         list[i] = {
-                            source: 'USGS',
-                            id: feature.id,
-                            timeZone: systemTimeZone,
+                            source: 'KMA',
+                            id: item.eventId,
+                            timeZone: 9,
                             useShindo: false,
-                            originTime: stampToTime(properties.time, systemTimeZone),
-                            lat,
-                            lng,
-                            hypocenter: (properties.status.toLowerCase() == 'reviewed' ? '' : '(A)') + (getFEName(lat, lng) || properties.place),
-                            depth,
-                            magnitude,
+                            intTitle: '최대진도',
+                            originTime: item.originTime,
+                            lat: item.latitude ?? null,
+                            lng: item.longitude ?? null,
+                            hypocenter: item.epicenter || '',
+                            depth: item.depth ?? null,
+                            magnitude: item.magnitude ?? null,
                             maxIntensity,
+                            maxIntensityText: '최대진도: ' + maxIntensity,
                             className: setClassName(maxIntensity, false),
-                            url: properties.url
-                        }
-                        break
-                    }
-                    case 'fssnEqlist': {
-                        let infoType
-                        switch (data[i].infoTypeName) {
-                            case '已确认':
-                                infoType = '(A)'
-                                break
-                            case '正式(已核实)':
-                                infoType = ''
-                                break
-                            case '取消':
-                                infoType = '(X)'
-                                break
-                            default:
-                                infoType = data[i].infoTypeName
-                                break
-                        }
-                        const lat = Number(data[i].latitude)
-                        const lng = Number(data[i].longitude)
-                        const depth = Number(data[i].depth)
-                        const magnitude = Number(data[i].magnitude)
-                        const isCanceled = data[i].infoTypeName == '取消'
-                        const maxIntensity = magnitude ? calcCsisLevel(magnitude, depth) : '不明'
-                        list[i] = {
-                            source: 'FSSN',
-                            id: data[i].id,
-                            timeZone: systemTimeZone,
-                            useShindo: false,
-                            originTime: convertTimeString(data[i].shockTime, 8),
-                            lat,
-                            lng,
-                            hypocenter: infoType + (getFEName(lat, lng) || data[i].placeName_zh || data[i].placeName),
-                            depth,
-                            magnitude,
-                            maxIntensity,
-                            isCanceled,
-                            className: setClassName(maxIntensity, false, isCanceled),
-                            url: 'https://seismic.fanstudio.tech/'
+                            url: item.url || '',
                         }
                         break
                     }
                 }
             }
             if(source == 'cencEqlist') {
-                const cacheKey = api == 'fan' ? 'fan' : 'wolfx'
+                const cacheKey = api == 'lipo' ? 'lipo' : 'wolfx'
                 this.cencHistoryCache[cacheKey] = list
-                const fanList = this.cencHistoryCache.fan
-                const merged = [...fanList]
+                const lipoList = this.cencHistoryCache.lipo
+                const merged = [...lipoList]
                 this.cencHistoryCache.wolfx.forEach(wolfxEvent => {
-                    if(!fanList.some(fanEvent => isSameCencHistoryEvent(fanEvent, wolfxEvent))) {
+                    if(!lipoList.some(lipoEvent => isSameCencHistoryEvent(lipoEvent, wolfxEvent))) {
                         merged.push(wolfxEvent)
                     }
                 })
                 merged.sort((a, b) => timeToStamp(b.originTime, b.timeZone) - timeToStamp(a.originTime, a.timeZone))
                 this.history[source] = merged
             }
-            else if(list.length > 0)
+            else if(list.length > 0 || api === 'lipo')
                 this.history[source] = list
         },        
         connect(protocol){
@@ -1318,18 +1109,14 @@ export const useStatusStore = defineStore('statusStore', {
                     const promises = this.enabledSource.map(async source=>{
                         if(source == 'jmaEqlist' && this.isApiEnabled(source, 'p2pquake') && status % 2 == 0 && (!this.eqMessage[source].id || status % 10 == 0)) {
                             const data = await Http.get(eqUrls.jmaEqlist_http)
-                            if(data && data.length > 0) this.setEqMessage(source, data[0])
+                            if(data && data.length > 0) this.setEqMessage(source, data[0], 'p2pquake')
                         }
                         if(source == 'jmaTsunami' && this.isApiEnabled(source, 'p2pquake') && status % 2 == 1 && (!this.tsunamiMessage[source].id || status % 10 == 1)) {
                             const data = await Http.get(tsunamiUrls.jmaTsunami_http)
                             if(data && data.length > 0) this.setTsunamiMessage(source, data[0])
                         }
                         if(source == 'usgsEqlist' && this.isApiEnabled(source, 'usgs') && status % 10 == 0) {
-                            const data = await Http.get(eqUrls.usgsEqlist_http + `?time=${stamp}`)
-                            if(data) {
-                                this.setEqMessage(source, data.features[0])
-                                this.setHistory(source, data.features)
-                            }
+                            await this.fetchUsgsReports(stamp)
                         }
                     })
                     await Promise.all(promises)
@@ -1338,13 +1125,9 @@ export const useStatusStore = defineStore('statusStore', {
             else if(protocol == 'ws'){
                 if(this.wolfxSocket) this.wolfxSocket.close()
                 if(this.activeWolfxSources.length > 0) {
-                    this.wolfxSocket = new WebSocketObj(eqUrls.wolfx_ws, this.activeWolfxSources.map(source => {
-                        if(source == 'ceaEew') return 'query_cenceew'
-                        else return `query_${source.toLowerCase()}`
-                    }))
+                    this.wolfxSocket = new WolfxClient(eqUrls.wolfx_ws, this.activeWolfxSources)
                     this.trackWebSocketStatus('wolfx', this.wolfxSocket)
-                    this.wolfxSocket.setMessageHandler((e)=>{
-                        const data = JSON.parse(e.data)
+                    this.wolfxSocket.setMessageHandler(data => {
                         const source = wolfx2Source[data.type]
                         if(source && this.activeWolfxSources.includes(source)) {
                             switch(source) {
@@ -1352,191 +1135,72 @@ export const useStatusStore = defineStore('statusStore', {
                                     this.setHistory(source, data)
                                     break
                                 case 'cencEqlist':
-                                    this.setEqMessage(source, data)
+                                    this.setEqMessage(source, data, 'wolfx')
                                     this.setHistory(source, data, 'wolfx')
                                     break
                                 default:
-                                    this.setEqMessage(source, data)
+                                    this.setEqMessage(source, data, 'wolfx')
                                     break
                             }
                         }
                     })
                 }
-                if(this.fanSocket) this.fanSocket.close()
-                if(this.activeFanSources.length > 0) {
+                if(this.lipoSocket) this.lipoSocket.close()
+                this.lipoSocket = null
+                this.lipoAuthStatus = -1
+                this.lipoError = ''
+                if(this.activeLipoSources.length > 0) {
                     const settingsStore = useSettingsStore()
-                    if(settingsStore.mainSettings.provinceCeaEew) {
-                        source2Fan['ceaEew'] = 'cea-pr'
-                        fan2Source['cea'] = 'ceaEew'
-                        fan2Source['cea-pr'] = 'ceaEew'
-                    }
-                    else {
-                        source2Fan['ceaEew'] = 'cea'
-                        fan2Source['cea'] = 'ceaEew'
-                        delete fan2Source['cea-pr']
-                    }
-                    const initMsg = []
-                    const apiKey = settingsStore.mainSettings.apiKeys.fanApiKey?.trim()
-                    if(apiKey) {
-                        initMsg.push(JSON.stringify({
-                            type: 'auth',
-                            appId: FAN_API_APP_ID,
-                            key: apiKey
-                        }))
-                    }
-                    else {
-                        ElMessage({
-                            message: '尚未配置FAN Studio API Key，部分功能受限',
-                            type: 'warning',
-                            duration: 10000,
-                            showClose: true
+                    const apiKey = settingsStore.mainSettings.apiKeys.lipoApiKey?.trim()
+                    if(!apiKey) {
+                        ElMessage({ message: '尚未配置Lipo API Key，部分功能受限', type: 'warning', duration: 10000, showClose: true })
+                    } else {
+                        const reportRequests = []
+                        if(this.activeLipoSources.includes('cwaEqlist')) reportRequests.push('cwa_report_list')
+                        if(this.activeLipoSources.includes('cencEqlist')) reportRequests.push('cenc_report_list')
+                        if(this.activeLipoSources.includes('kmaEqlist')) reportRequests.push('kma_report_list')
+                        if(this.activeLipoSources.includes('usgsEqlist')) reportRequests.push('usgs_report_list')
+                        const client = new LipoApiClient(eqUrls.lipo_ws, {
+                            key: apiKey,
+                            reportRequests,
+                            autoReconnectOnAuthFail: settingsStore.mainSettings.apiAuthAutoReconnect,
+                        })
+                        this.lipoSocket = client
+                        this.trackWebSocketStatus('lipo', client)
+                        client.setCloseHandler(() => {
+                            if(this.lipoAuthStatus !== 0) this.lipoAuthStatus = -1
+                        })
+                        client.setMessageHandler(message => {
+                            switch(message.type) {
+                                case 'auth_ok':
+                                    this.lipoAuthStatus = 1
+                                    this.lipoError = ''
+                                    ElMessage({ message: 'Lipo API认证成功', type: 'success' })
+                                    break
+                                case 'error':
+                                    this.lipoAuthStatus = 0
+                                    this.lipoError = message.data?.message || message.data?.code || '连接失败'
+                                    ElMessage({ message: 'Lipo API：' + this.lipoError, type: 'error', duration: 10000, showClose: true })
+                                    break
+                                case 'init':
+                                case 'query_all':
+                                    Object.values(message.data).forEach(item => this.receiveLipoMessage(item))
+                                    break
+                                default:
+                                    this.receiveLipoMessage(message)
+                                    break
+                            }
                         })
                     }
-                    const autoMsg = ['query']
-                    if(this.activeFanSources.includes('cwaEqlist')) {
-                        autoMsg.push('cwalist')
-                        initMsg.push('cwalist')
-                    }
-                    if(this.activeFanSources.includes('cencEqlist')) {
-                        autoMsg.push('cencirlist', 'cenclist')
-                        initMsg.push('cencirlist', 'cenclist')
-                    }
-                    if(this.activeFanSources.includes('fssnEqlist')) {
-                        autoMsg.push('fssnlist')
-                        initMsg.push('fssnlist')
-                    }
-                    const fanUrls = [...eqUrls.fan_ws]
-                    const defaultId = settingsStore.advancedSettings.defaultFanServer
-                    fanUrls.unshift(...fanUrls.splice(defaultId, 1))
-                    const autoReconnectOnAuthFail = Boolean(apiKey) && settingsStore.mainSettings.apiAuthAutoReconnect
-                    this.fanSocket = new WebSocketObj(fanUrls, autoMsg, initMsg, {
-                        resetRetryOnOpen: !autoReconnectOnAuthFail
-                    })
-                    this.trackWebSocketStatus('fan', this.fanSocket)
-                    this.fanSocket.setCloseHandler(() => {
-                        if(autoReconnectOnAuthFail && this.fanSocket.shouldConnect && this.fanAuthStatus == 0) return
-                        this.fanAuthStatus = -1
-                    })
-                    this.fanSocket.setMessageHandler((e)=>{
-                        const data = JSON.parse(e.data)
-                        switch(data.type) {
-                            case 'auth_success': {
-                                this.fanAuthStatus = 1
-                                this.fanSocket.resetRetryInterval()
-                                ElMessage({
-                                    message: 'FAN Studio API认证成功',
-                                    type: 'success'
-                                })
-                                break
-                            }
-                            case 'auth_fail': {
-                                this.fanAuthStatus = 0
-                                ElMessage({
-                                    message: data.message
-                                        ? `FAN Studio API认证失败：${data.message}`
-                                        : 'FAN Studio API认证失败，请检查API Key',
-                                    type: 'error',
-                                    duration: 10000,
-                                    showClose: true
-                                })
-                                if(autoReconnectOnAuthFail) this.fanSocket.retryAfterFailure()
-                                break
-                            }
-                            case 'initial_all': case 'query_response': {
-                                this.activeFanSources.forEach(source => {
-                                    const Data = data[source2Fan[source]]?.Data
-                                    if(Data) {
-                                        if (source == 'nmefcTsunami') {
-                                            if (Data.warningInfo.level != '信息') {
-                                                this.setTsunamiMessage(source, Data)
-                                            }
-                                        }
-                                        else {
-                                            this.setEqMessage(source, Data, 1)
-                                        }
-                                    }
-                                })
-                                break
-                            }
-                            case 'update': {
-                                const source = fan2Source[data.source]
-                                const Data = data?.Data
-                                if(source && this.activeFanSources.includes(source) && Data)
-                                    source.endsWith('Tsunami') ? this.setTsunamiMessage(source, Data) : this.setEqMessage(source, Data, 1)
-                                break
-                            }
-                            case 'cwalist_response': {
-                                const source = 'cwaEqlist'
-                                const Data = data?.Data
-                                if(this.isApiEnabled(source, 'fan')) this.setHistory(source, Data)
-                                break
-                            }
-                            case 'cenclist_response': {
-                                const source = 'cencEqlist'
-                                const Data = data?.Data
-                                if(this.isApiEnabled(source, 'fan')) this.setHistory(source, Data, 'fan')
-                                break
-                            }
-                            case 'fssnlist_response': {
-                                const source = 'fssnEqlist'
-                                const Data = data?.Data
-                                if(this.isApiEnabled(source, 'fan')) this.setHistory(source, Data)
-                                break
-                            }
-                            case 'cencirlist_response': {
-                                if(!this.isApiEnabled('cencEqlist', 'fan')) break
-                                const isEmpty = this.intReportIds.size == 0
-                                const arr = data.Data?.map(item => ({
-                                    id: String(item.id),
-                                    msg: `${item.locName}M${item.magnitude}`
-                                }))
-                                const newMsgs = []
-                                arr?.forEach(item => {
-                                    if(!this.intReportIds.has(item.id)) {
-                                        this.intReportIds.add(item.id)
-                                        newMsgs.push(item.msg)
-                                    }
-                                })
-                                if(!isEmpty && newMsgs.length > 0) {
-                                    const message = '收到新的CENC烈度速报: ' + newMsgs.join(' ')
-                                    ElMessage({
-                                        message,
-                                        type: 'success',
-                                        duration: 10000,
-                                        showClose: true,
-                                    })
-                                    const settingsStore = useSettingsStore()
-                                    if(settingsStore.mainSettings.onReport.sound) {
-                                        playSound('detail')
-                                    }
-                                    if(settingsStore.mainSettings.onReport.focus) focusWindow()
-                                    if(settingsStore.mainSettings.onReport.notification) {
-                                        sendMyNotification('CENC烈度速报', message, iconUrls.info)
-                                    }
-                                }
-                                while(this.intReportIds.size > maxIntReportNum) {
-                                    const first = this.intReportIds.values().next().value
-                                    this.intReportIds.delete(first)
-                                }
-                                break
-                            }
-                            case 'cencirdetail_response': {
-                                const Data = data?.Data
-                                this.historyList?.find(event => event.eqMessage.intReportId == Data.id)?.createStations(Data)
-                                break
-                            }
-                        }
-                    })
                 }
                 if(this.p2pquakeSocket) this.p2pquakeSocket.close()
                 if(this.activeP2pquakeSources.length > 0) {
-                    this.p2pquakeSocket = new WebSocketObj(eqUrls.p2pquake_ws, ['ping'])
+                    this.p2pquakeSocket = new P2pQuakeClient(eqUrls.p2pquake_ws)
                     this.trackWebSocketStatus('p2pquake', this.p2pquakeSocket)
-                    this.p2pquakeSocket.setMessageHandler((e)=>{
-                        const data = JSON.parse(e.data)
+                    this.p2pquakeSocket.setMessageHandler(data => {
                         switch(data.code) {
                             case 551:
-                                if(this.activeP2pquakeSources.includes('jmaEqlist')) this.setEqMessage('jmaEqlist', data)
+                                if(this.activeP2pquakeSources.includes('jmaEqlist')) this.setEqMessage('jmaEqlist', data, 'p2pquake')
                                 break
                             case 552:
                                 if(this.activeP2pquakeSources.includes('jmaTsunami')) this.setTsunamiMessage('jmaTsunami', data)
@@ -1546,11 +1210,10 @@ export const useStatusStore = defineStore('statusStore', {
                 }
                 if(this.gqSocket) this.gqSocket.close()
                 if(this.isApiEnabled('gqEew', 'globalquake') && 'gqEew_ws' in eqUrls) {
-                    this.gqSocket = new WebSocketObj(eqUrls.gqEew_ws, ['ping'])
+                    this.gqSocket = new GlobalQuakeClient(eqUrls.gqEew_ws)
                     this.trackWebSocketStatus('gq', this.gqSocket)
-                    this.gqSocket.setMessageHandler((e)=>{
-                        const data = JSON.parse(e.data)
-                        if(data.RevisionId) this.setEqMessage('gqEew', data)
+                    this.gqSocket.setMessageHandler(data => {
+                        if(data.RevisionId) this.setEqMessage('gqEew', data, 'globalquake')
                     })
                 }
             }
@@ -1558,21 +1221,97 @@ export const useStatusStore = defineStore('statusStore', {
                 console.log('Unrecognized protocol type.')
             }
         },
-        getIrDetail(id) {
-            if(this.fanSocket && this.isApiEnabled('cencEqlist', 'fan') && id) {
-                const msg = {
-                    type: 'cencirdetail',
-                    id
-                }
-                this.fanSocket.send(JSON.stringify(msg))
+        receiveLipoMessage(message) {
+            if(!message || message.data == null) return
+            const { type, data } = message
+            if(type === 'cenc_ir') {
+                if(this.isApiEnabled('cencEqlist', 'lipo')) this.setIntReports(data)
+                return
+            }
+            const listSource = {
+                cenc_report_list: 'cencEqlist', cwa_report_list: 'cwaEqlist',
+                kma_report_list: 'kmaEqlist', usgs_report_list: 'usgsEqlist',
+            }[type]
+            if(listSource) {
+                if(this.isApiEnabled(listSource, 'lipo') && Array.isArray(data)) this.setHistory(listSource, data, 'lipo')
+                return
+            }
+            const source = lipo2Source[type]
+            if(!source || !this.activeLipoSources.includes(source)) return
+            if(source === 'nmefcTsunami') this.setTsunamiMessage(source, data)
+            else this.setEqMessage(source, data, 'lipo')
+        },
+        setIntReports(reports) {
+            if(!Array.isArray(reports)) return
+            const summaries = reports.filter(item => item && typeof item.title === 'string'
+                && (typeof item.id === 'string' || Number.isSafeInteger(item.id)))
+            const nextIds = new Set(summaries.map(item => String(item.id)))
+            const newTitles = summaries.filter(item => !this.intReportIds.has(String(item.id))).map(item => item.title)
+            const initialized = this.intReportsInitialized
+            this.intReportIds = nextIds
+            this.intReportsInitialized = true
+            // A summary can arrive independently of the next history-list response.
+            for(const item of this.history.cencEqlist) {
+                const id = item.originTime.replace(/[^0-9]/g, '')
+                item.intReportId = nextIds.has(id) ? id : null
+            }
+            if(!initialized || newTitles.length === 0) return
+            const message = '收到新的CENC烈度速报: ' + newTitles.join(' ')
+            ElMessage({ message, type: 'success', duration: 10000, showClose: true })
+            const settingsStore = useSettingsStore()
+            if(settingsStore.mainSettings.onReport.sound) playSound('detail')
+            if(settingsStore.mainSettings.onReport.focus) focusWindow()
+            if(settingsStore.mainSettings.onReport.notification) sendMyNotification('CENC烈度速报', message, iconUrls.info)
+        },
+        async getIrDetail(id) {
+            const settingsStore = useSettingsStore()
+            const key = settingsStore.mainSettings.apiKeys.lipoApiKey?.trim()
+            if(!this.isApiEnabled('cencEqlist', 'lipo') || !key || !id) return
+            id = String(id)
+            const cacheKey = key + '|' + id
+            let pending = irDetailRequests.get(cacheKey)
+            if(!pending) {
+                pending = (async () => {
+                    const cached = irDetailCache.get(cacheKey)
+                    const response = await Http.getResponse(eqUrls.cencIr_http, {
+                        params: { id, key },
+                        headers: cached?.etag ? { 'If-None-Match': cached.etag } : {},
+                        validateStatus: status => status === 200 || status === 304 || status === 404,
+                    })
+                    if(response.status === 304) return cached?.data
+                    if(response.status === 404) {
+                        irDetailCache.delete(cacheKey)
+                        return null
+                    }
+                    const data = response.data?.data
+                    if(!Array.isArray(data)) throw new Error('INVALID_DETAIL')
+                    irDetailCache.set(cacheKey, { data, etag: response.headers.etag })
+                    while(irDetailCache.size > 25) irDetailCache.delete(irDetailCache.keys().next().value)
+                    return data
+                })()
+                irDetailRequests.set(cacheKey, pending)
+            }
+            try {
+                const data = await pending
+                if(settingsStore.mainSettings.apiKeys.lipoApiKey?.trim() !== key || !this.isApiEnabled('cencEqlist', 'lipo')) return
+                const event = this.historyList?.find(event => String(event.eqMessage?.intReportId) === id)
+                if(data) event?.createStations(data)
+                else event?.terminateStations()
+            } catch(error) {
+                // Axios errors contain the query-string credential; display only the status.
+                const status = error.response?.status
+                ElMessage({ message: status === 401 ? 'Lipo API Key不可用，无法读取烈度详情' : 'CENC烈度详情读取失败', type: 'error' })
+            } finally {
+                if(irDetailRequests.get(cacheKey) === pending) irDetailRequests.delete(cacheKey)
             }
         },
         disconnect(){
+            this.usgsHttpRequestId++
             clearInterval(this.httpRequest)
             clearTimeout(this.wsConnectTimer)
             this.wsConnectTimer = null
             if(this.wolfxSocket) this.wolfxSocket.close()
-            if(this.fanSocket) this.fanSocket.close()
+            if(this.lipoSocket) this.lipoSocket.close()
             if(this.p2pquakeSocket) this.p2pquakeSocket.close()
             if(this.gqSocket) this.gqSocket.close()
         },

@@ -8,6 +8,7 @@
 import { onMounted } from 'vue';
 import { useStatusStore } from '@/stores/status';
 import Http from '@/classes/Http';
+import { stampToTime } from '@/utils/Utils';
 
 const statusStore = useStatusStore()
 setTimeout(() => {
@@ -17,7 +18,6 @@ setTimeout(() => {
 const testJmaEew = true
 const testCwaEew = true
 const testIclEew = true
-const testScEew = false
 const testJmaEqlist = true
 const testCencEqlist = true
 const testJmaTsunami = true
@@ -66,7 +66,7 @@ onMounted(async ()=>{
                 "OriginalText": "",
                 "Pond": ""
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'wolfx')
         }, 3500);
         setTimeout(() => {
             const data = {
@@ -105,7 +105,7 @@ onMounted(async ()=>{
                 "OriginalText": "",
                 "Pond": ""
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'wolfx')
         }, 5500);
         setTimeout(() => {
             const data = {
@@ -377,7 +377,7 @@ onMounted(async ()=>{
                 "OriginalText": "",
                 "Pond": ""
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'wolfx')
         }, 8000);
         setTimeout(() => {
             const data = {
@@ -416,7 +416,7 @@ onMounted(async ()=>{
                 "OriginalText": "",
                 "Pond": ""
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'wolfx')
         }, 10000);
         setTimeout(() => {
             const data = {
@@ -455,7 +455,7 @@ onMounted(async ()=>{
                 "OriginalText": "",
                 "Pond": ""
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'wolfx')
         }, 15000);
         // setTimeout(() => {
         //     const data = {
@@ -575,7 +575,7 @@ onMounted(async ()=>{
         //         "OriginalText": "37 03 00 240809195827 C11 240809195738 ND20240809195740 NCN915 JD////////////// JN/// 361 N354 E1392 010 52 04 RK44559 RT01/// RC0//// EBI 361 S0404 ////// 11 360 S0404 ////// 11 441 S0404 ////// 11 412 S0403 ////// 11 351 S0403 ////// 11 352 S0404 195747 19 440 S0404 195746 19 331 S0404 195750 19 350 S0404 195750 19 411 S0404 195752 19 9999=",
         //         "Pond": "15"
         //     }
-        //     statusStore.setEqMessage(source, data)
+        //     statusStore.setEqMessage(source, data, 'wolfx')
         // }, 5000);
     }
     if(testCwaEew){
@@ -596,16 +596,16 @@ onMounted(async ()=>{
                 "MaxIntensity": "6強",
                 "isCancel": false
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'wolfx')
         }, 2000);
     }
     if(testIclEew){
         const source = 'iclEew'
-        const startAt = Date.now()
+        const originTime = stampToTime(Date.now(), 8)
         // setTimeout(() => {
         //     const data = {
         //         "depth": 0,
-        //         "epiIntensity": 0,
+        //         "maxIntensity": 0,
         //         "epicenter": "西藏墨竹工卡",
         //         "eventId": 84928653,
         //         "insideNet": 0,
@@ -614,231 +614,210 @@ onMounted(async ()=>{
         //         "magnitude": 6.0,
         //         "sations": 5,
         //         "sourceType": "meihuan",
-        //         startAt,
-        //         "updateAt": Date.now(),
-        //         "updates": 4
+        //         originTime,
+        //         "reportTime": stampToTime(Date.now(), 8),
+        //         "reportNum": 4
         //     }
-        //     statusStore.setEqMessage(source, data)
+        //     statusStore.setEqMessage(source, data, 'lipo')
         // }, 3000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 1,
+                "eventId": "84222641",
+                "reportNum": 1,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 0,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 4000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 2,
+                "eventId": "84222641",
+                "reportNum": 2,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 5,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 5000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 3,
+                "eventId": "84222641",
+                "reportNum": 3,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 10,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 6000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 4,
+                "eventId": "84222641",
+                "reportNum": 4,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 20,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 7000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 5,
+                "eventId": "84222641",
+                "reportNum": 5,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 30,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 8000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 6,
+                "eventId": "84222641",
+                "reportNum": 6,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 40,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 9000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 7,
+                "eventId": "84222641",
+                "reportNum": 7,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 60,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 10000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 8,
+                "eventId": "84222641",
+                "reportNum": 8,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 80,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 11000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 9,
+                "eventId": "84222641",
+                "reportNum": 9,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 100,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 12000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 10,
+                "eventId": "84222641",
+                "reportNum": 10,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 120,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 13000);
         setTimeout(() => {
             const data = {
-                "eventId": 84222641,
-                "updates": 11,
+                "eventId": "84222641",
+                "reportNum": 11,
                 "latitude": 32.00443,
                 "longitude": 117.68219,
                 "depth": 150,
                 "epicenter": "安徽肥东",
-                startAt,
-                "updateAt": Date.now(),
+                originTime,
+                "reportTime": stampToTime(Date.now(), 8),
                 "magnitude": 8.0,
                 "insideNet": 0,
                 "sations": 7,
                 "sourceType": "meihuan",
-                "epiIntensity": 0
+                "maxIntensity": 0
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'lipo')
         }, 14000);
-    }
-    if(testScEew){
-        const source = 'scEew'
-        const time = new Date()
-        const timeStr = time.toLocaleString()
-        setTimeout(() => {
-            const data = {
-                "ID": 7800,
-                "EventID": "20241022232024.0001_1",
-                "ReportTime": "2024-10-22 23:20:40",
-                "ReportNum": 1,
-                "OriginTime": timeStr,
-                "HypoCenter": "四川绵阳市北川县",
-                "Latitude": 31.832,
-                "Longitude": 104.353,
-                "Magunitude": 3,
-                "Depth": null,
-                "MaxIntensity": 4
-            }
-            statusStore.setEqMessage(source, data)
-        }, 4000);
     }
     if(testJmaEqlist){
         const source = 'jmaEqlist'
@@ -853,7 +832,7 @@ onMounted(async ()=>{
                 const time = new Date()
                 time.setHours(time.getHours() + 1)
                 data.issue.time = time.toLocaleString()
-                statusStore.setEqMessage(source, data)
+                statusStore.setEqMessage(source, data, 'p2pquake')
             }
         }, 8000);
     }
@@ -877,7 +856,7 @@ onMounted(async ()=>{
                     "intensity": "4"
                 }
             }
-            statusStore.setEqMessage(source, data)
+            statusStore.setEqMessage(source, data, 'wolfx')
         }, 10000)
     }
     if(testJmaTsunami){

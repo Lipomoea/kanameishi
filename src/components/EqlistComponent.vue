@@ -41,8 +41,8 @@
             <el-option label="CENC" value="CENC" :disabled="!statusStore.enabledSource.includes('cencEqlist')" />
             <el-option label="CWA" value="CWA" :disabled="!statusStore.enabledSource.includes('cwaEqlist')" />
             <el-option label="JMA" value="JMA" :disabled="!statusStore.enabledSource.includes('jmaEqlist')" />
+            <el-option label="KMA" value="KMA" :disabled="!statusStore.enabledSource.includes('kmaEqlist')" />
             <el-option label="USGS" value="USGS" :disabled="!statusStore.enabledSource.includes('usgsEqlist')" />
-            <el-option label="FSSN" value="FSSN" :disabled="!statusStore.enabledSource.includes('fssnEqlist')" />
           </el-select>
         </div>
       </div>

@@ -9,13 +9,13 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, inject } fr
 import { useStatusStore } from '@/stores/status';
 import { isNetworkPeriodActive } from '@/features/eew/EewNetworkRelations';
 import { useSettingsStore } from '@/stores/settings';
-import { FAN_API_APP_ID, iconUrls, seisNetUrls } from '@/utils/Urls';
+import { iconUrls, seisNetUrls } from '@/utils/Urls';
 import { playSound, sendMyNotification, calcTimeDiff, focusWindow, getMmiFromKmaLevel, exactRound, calcDistanceKm } from '@/utils/Utils';
 import 'leaflet/dist/leaflet.css';
 import { KmaStation, simpleIcon } from '@/classes/StationClasses';
 import { KmaStationCanvasLayer } from '@/classes/StationCanvasLayer';
 import { KmaGridCanvasLayer } from '@/classes/GridCanvasLayer';
-import WebSocketObj from '@/classes/WebSocket';
+import { LipoApiClient } from '@/classes/WebSocket';
 
 const statusStore = useStatusStore()
 const settingsStore = useSettingsStore()
@@ -159,65 +159,59 @@ const initGridCanvasLayer = () => {
 }
 let kmaSocket = null
 onMounted(()=>{
-    const apiKey = settingsStore.mainSettings.apiKeys.fanApiKey?.trim()
+    const apiKey = settingsStore.mainSettings.apiKeys.lipoApiKey?.trim()
     if(!apiKey) {
         ElMessage({
-            message: '未填写FAN Studio API Key, KMA-PEWS不可用',
+            message: '未填写Lipo API Key, KMA-PEWS不可用',
             type: 'error'
         })
         settingsStore.mainSettings.displaySeisNet.kmaNet = false
         return
     }
-    const authMessage = JSON.stringify({
-        type: 'auth',
-        appId: FAN_API_APP_ID,
-        key: apiKey
-    })
-    const url = [...seisNetUrls.kma]
-    const defaultId = settingsStore.advancedSettings.defaultFanServer
-    url.unshift(...url.splice(defaultId, 1))
     const autoReconnectOnAuthFail = settingsStore.mainSettings.apiAuthAutoReconnect
-    kmaSocket = new WebSocketObj(url, ['ping'], [authMessage], {
-        resetRetryOnOpen: !autoReconnectOnAuthFail
+    kmaSocket = new LipoApiClient(seisNetUrls.kma, {
+        key: apiKey,
+        pews: true,
+        autoReconnectOnAuthFail,
     })
-    kmaSocket.setMessageHandler(e => {
+    kmaSocket.setMessageHandler(data => {
         if(stopped) return
-        const data = JSON.parse(e.data)
         const type = data?.type
         switch(type) {
-            case 'auth_success': {
-                kmaSocket.resetRetryInterval()
+            case 'auth_ok': {
                 ElMessage({
-                    message: 'FAN Studio API (KMA-PEWS)认证成功',
+                    message: 'Lipo API (KMA-PEWS)认证成功',
                     type: 'success'
                 })
                 break
             }
-            case 'auth_fail': {
+            case 'error': {
                 ElMessage({
-                    message: data.message
-                        ? `FAN Studio API (KMA-PEWS)认证失败：${data.message}`
-                        : 'FAN Studio API (KMA-PEWS)认证失败，请检查API Key',
+                    message: data.data?.message
+                        ? `Lipo API (KMA-PEWS)：${data.data.message}`
+                        : 'Lipo API (KMA-PEWS)认证失败，请检查API Key',
                     type: 'error',
                     duration: 10000,
                     showClose: true
                 })
-                if(autoReconnectOnAuthFail) kmaSocket.retryAfterFailure()
-                else settingsStore.mainSettings.displaySeisNet.kmaNet = false
+                if(!autoReconnectOnAuthFail && ['AUTH_FAILED', 'PATH_FORBIDDEN'].includes(data.data?.code)) {
+                    settingsStore.mainSettings.displaySeisNet.kmaNet = false
+                }
                 break
             }
-            case 'initial_stations': case 'kma_stations_update': {
-                const list = data.stations
+            case 'station_list': {
+                const list = data.data?.staLatLng
                 if(list && JSON.stringify(list) != JSON.stringify(stationList)) {
                     stationList.length = 0
                     stationList.push(...list)
                 }
                 break
             }
-            case 'initial': case 'update': {
-                const Data = data.Data
-                const { timestamp, mmi } = Data
-                const timeDiff = calcTimeDiff(timestamp, 9, kmaUpdateTime.value, 9)
+            case 'station_int': {
+                const Data = data.data
+                const { frameTime, mmi } = Data || {}
+                if(typeof frameTime !== 'string' || !Array.isArray(mmi)) return
+                const timeDiff = calcTimeDiff(frameTime, 9, kmaUpdateTime.value, 9)
                 if(timeDiff > 0) {
                     if(mmi.length != stations.length || mmi.some(int => int == -3)) return
                     if(timeDiff > 1000) {
@@ -228,7 +222,7 @@ onMounted(()=>{
                             station.recentLevel.splice(station.recentSeconds)
                         })
                     }
-                    kmaUpdateTime.value = timestamp
+                    kmaUpdateTime.value = frameTime
                     update(mmi)
                 }
                 break

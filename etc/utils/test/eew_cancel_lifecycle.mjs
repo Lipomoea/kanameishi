@@ -17,7 +17,7 @@ const judgeSource = section(read('src/utils/Utils.js'),
     'export const judgeSameEvent', 'export const focusWindow').replace('export ', '')
 
 // Run the production watcher and event lifecycle with virtual time and no map/audio side effects.
-const createHarness = () => {
+const createHarness = (source = 'jmaEew') => {
     let now = 0, timerId = 0, creations = 0
     const timers = new Map(), sounds = [], ignoredIds = {}, activeEewList = reactive([])
     const setTimeoutFake = (fn, delay) => {
@@ -29,7 +29,7 @@ const createHarness = () => {
     const settingsStore = {
         mainSettings: {
             userLatLng: [0, 0], countdownStart: 10, actionMag: 0, intenseLocalCsis: 6,
-            onEew: { sound: true }, onEewWarn: {}
+            onEew: { sound: true }, onEewWarn: {}, gqActionMag: 0
         },
         advancedSettings: { forceCalcInt: false }, actionWhiteListArr: [],
         isValidUserLatLng: false, nearestJmaLoc: null
@@ -49,12 +49,12 @@ const createHarness = () => {
         if(first) creations++
         return update.call(this, message, time, first)
     }
-    const statusStore = reactive({ eqMessage: { jmaEew: {} }, map: {} })
+    const statusStore = reactive({ eqMessage: { [source]: {} }, map: {} })
     const watcherDependencies = {
-        watch, eqMessage: computed(() => statusStore.eqMessage.jmaEew), className: ref(''),
+        watch, eqMessage: computed(() => statusStore.eqMessage[source]), className: ref(''),
         calcPassedTime: time => now - Date.parse(time), ignoredIds, activeEewList,
         judgeSameEvent: new Function(`${judgeSource}\nreturn judgeSameEvent;`)(),
-        statusStore, settingsStore, props: { source: 'jmaEew' }, reactive, EewEvent,
+        statusStore, settingsStore, props: { source }, reactive, EewEvent,
         handleTempEqlists() {}, smartSetView() {},
         setTimeout: setTimeoutFake, clearTimeout: clearTimeoutFake
     }
@@ -77,9 +77,9 @@ const createHarness = () => {
             now = target
             await nextTick()
         },
-        async deliver({ type = 0, reportNum = 3, isCanceled = false, reportStamp = 0, id = 'same-event' } = {}) {
-            Object.assign(statusStore.eqMessage.jmaEew, {
-                source: 'jmaEew', id, type, reportNum, isCanceled,
+        async deliver({ type = 0, quality = null, reportNum = 3, isCanceled = false, reportStamp = 0, id = 'same-event' } = {}) {
+            Object.assign(statusStore.eqMessage[source], {
+                source, id, type, quality, reportNum, isCanceled,
                 reportTime: new Date(reportStamp).toISOString(), timeZone: 9,
                 isEew: true, isWarn: false, isAssumption: false, isFinal: false,
                 lat: 35, lng: 140, magnitude: 3, hypocenter: 'test', className: 'white'
@@ -147,6 +147,31 @@ console.log('PASS a cancellation can supersede an expired normal report once at 
     h.stop()
 }
 console.log('PASS report-number priority, active provider supplementation and independent event IDs')
+
+{
+    const h = createHarness('gqEew')
+    await h.deliver({ quality: 3 })
+    const active = h.activeEewList[0]
+    // GQ has no same-report supplementation, even if quality or the configured type changes.
+    await h.deliver({ quality: 0, type: -1 })
+    assert.equal(active.eqMessage.quality, 3)
+    assert.equal(active.eqMessage.type, 0)
+    assert.equal(h.sounds.length, 1)
+    await h.deliver({ quality: 5, reportNum: 4 })
+    assert.equal(active.eqMessage.quality, 5, 'Newer reports update even with worse quality')
+    assert.equal(h.sounds.length, 2)
+    await h.deliver({ quality: 0, reportNum: 3, isCanceled: true })
+    assert.equal(active.eqMessage.isCanceled, false, 'Quality cannot override report-number ordering')
+    await h.deliver({ quality: 5, reportNum: 4, isCanceled: true })
+    assert.equal(active.eqMessage.isCanceled, true)
+    assert.equal(active.eqMessage.quality, 5)
+    assert.equal(h.sounds.at(-1), 'cancel')
+    await h.advance(21001)
+    await h.deliver({ quality: 0, reportNum: 4, reportStamp: 21001 })
+    assert.equal(h.creations, 1, 'Same-report quality cannot revive a cancelled GQ event')
+    h.stop()
+}
+console.log('PASS GQ updates by report number and cancellation state only; quality is display metadata')
 
 for(const isCanceled of [false, true]) {
     const h = createHarness()

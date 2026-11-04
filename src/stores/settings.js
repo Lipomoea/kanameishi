@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { jmaSeisIntLoc } from '@/utils/JmaSeisIntLoc';
 import { calcDistanceKm } from '@/utils/Utils';
-import { createDefaultDataSources, dataSourceCatalog } from '@/utils/DataSources';
+import { createDefaultDataSources, dataSourceCatalog, migrateDataSources } from '@/utils/DataSources';
 import { useAccessStore } from './access';
 import { parseSettings, restoreSettings } from '@/utils/SettingsRestore';
 
@@ -9,9 +9,8 @@ const createDefaultSettings = () => {
     return {
         mainSettings: {
             dataSources: createDefaultDataSources(),
-            provinceCeaEew: false,
             apiKeys: {
-                fanApiKey: ''
+                lipoApiKey: ''
             },
             apiAuthAutoReconnect: false,
             displaySeisNet: {
@@ -51,11 +50,9 @@ const createDefaultSettings = () => {
             intenseLocalShindo: 3,
             gqActionMag: 5.0,
             usgsActionMag: 5.0,
-            fssnActionMag: 5.0,
-            fssnActionType: 1,
             actionWhiteList: '',
             historyMagThres: 0.0,
-            historySources: ['CENC', 'CWA', 'JMA', 'USGS', 'FSSN'],
+            historySources: ['CENC', 'CWA', 'JMA', 'KMA', 'USGS'],
             onEew: {
                 notification: false,
                 sound: false,
@@ -125,7 +122,6 @@ const createDefaultSettings = () => {
             displayTyphoon: false
         },
         advancedSettings: {
-            defaultFanServer: 0,
             displayApiType: false,
             forceCalcInt: false,
             useClassicMapLoader: false,
@@ -250,9 +246,7 @@ export const useSettingsStore = defineStore('settingsStore', {
         },
         setMainSettings(jsonString){
             const json = parseSettings(jsonString)
-            if(!Object.hasOwn(json, 'apiAuthAutoReconnect') && typeof json.fanAuthAutoReconnect === 'boolean') {
-                json.apiAuthAutoReconnect = json.fanAuthAutoReconnect
-            }
+            json.dataSources = migrateDataSources(json.dataSources)
             this.mainSettings = restoreSettings(createDefaultSettings().mainSettings, json, mainSettingsArrayReaders)
             if(!['realtime', 'complete'].includes(this.mainSettings.displaySeisNet.httpDataPriority)) {
                 this.mainSettings.displaySeisNet.httpDataPriority = 'realtime'

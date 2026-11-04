@@ -1,15 +1,11 @@
-const fanWsBaseUrl = ["wss://ws.fanstudio.tech", "wss://ws.fanstudio.hk"];
-
-export const FAN_API_APP_ID = "76d92e4b-a1d2-46be-93c8-75fc2d3286b8";
-
 export const eqUrls = {
   niedLatest: "http://www.kmoni.bosai.go.jp/webservice/server/pros/latest.json",
-  jmaEew2_http: "http://www.kmoni.bosai.go.jp/webservice/hypo/eew",
   jmaEqlist_http: "https://api.p2pquake.net/v2/history?codes=551&limit=1",
   usgsEqlist_http:
     "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson",
   wolfx_ws: ["wss://ws-api.wolfx.jp/all_eew"],
-  fan_ws: fanWsBaseUrl.map(baseUrl => baseUrl + "/all"),
+  lipo_ws: "wss://api.lipomoea.cn/all",
+  cencIr_http: "https://api.lipomoea.cn/cenc-ir",
   p2pquake_ws: ["wss://api.p2pquake.net/v2/ws"],
 };
 export const tsunamiUrls = {
@@ -22,7 +18,7 @@ export const seisNetUrls = {
     stationData:
       "https://weather-kyoshin.east.edge.storage-yahoo.jp/RealTimeData",
   },
-  kma: fanWsBaseUrl.map(baseUrl => baseUrl + "/kma-station"),
+  kma: "wss://api.lipomoea.cn/kma_pews",
 };
 export const iconUrls = {
   info: "/icon/info.png",

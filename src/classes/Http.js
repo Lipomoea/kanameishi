@@ -2,6 +2,10 @@ import axios from "axios";
 import { fetch } from '@tauri-apps/plugin-http';
 
 class Http {
+    // Callers that need status/headers (e.g. ETag/304) handle errors themselves.
+    static getResponse(url, config = {}) {
+        return axios.get(url, { timeout: 30000, ...config })
+    }
     static async get(url, config = { timeout: 30000 }) {
         try {
             const res = await axios.get(url, config)

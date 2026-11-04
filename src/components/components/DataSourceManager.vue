@@ -9,26 +9,26 @@
         append-to-body
     >
         <el-alert
-            v-if="!hasFanApiKey"
+            v-if="!hasLipoApiKey"
             class="api-key-warning"
             type="warning"
             :closable="false"
             show-icon
         >
             <template #title>
-                <span>尚未配置FAN Studio API Key，部分功能受限。</span>
+                <span>尚未配置Lipo API Key，部分功能受限。</span>
                 <el-button type="primary" link @click="emit('manage-api-key')">前往管理API Key</el-button>
             </template>
         </el-alert>
         <el-alert
-            v-else-if="statusStore.fanAuthStatus == 0"
+            v-else-if="statusStore.lipoAuthStatus == 0"
             class="api-key-warning"
             type="error"
             :closable="false"
             show-icon
         >
             <template #title>
-                <span>FAN Studio API认证失败，部分功能受限。请检查您的API Key是否正确。</span>
+                <span>Lipo API：{{ statusStore.lipoError || '认证失败，请检查API Key' }}</span>
                 <el-button type="primary" link @click="emit('manage-api-key')">前往管理API Key</el-button>
             </template>
         </el-alert>
@@ -77,18 +77,6 @@
                                             :aria-label="`${dataSourceCatalog[source].label} ${dataSourceProviders[provider]}`"
                                             @change="toggleApi(source, provider, $event)"
                                         />
-                                        <el-select
-                                            v-if="source == 'ceaEew' && provider == 'fan'"
-                                            v-model="settingsStore.mainSettings.provinceCeaEew"
-                                            class="cea-fan-level"
-                                            size="small"
-                                            :disabled="!settingsStore.mainSettings.dataSources.ceaEew.fan"
-                                            aria-label="中国地震局 FAN 级别"
-                                            @change="emit('change')"
-                                        >
-                                            <el-option label="国家级" :value="false" />
-                                            <el-option label="省级" :value="true" />
-                                        </el-select>
                                     </div>
                                     <span v-else class="unsupported">-</span>
                                 </td>
@@ -121,7 +109,7 @@ const settingsStore = useSettingsStore()
 const accessStore = useAccessStore()
 const statusStore = useStatusStore()
 const activeCategory = ref(dataSourceCategories[0].key)
-const hasFanApiKey = computed(() => Boolean(settingsStore.mainSettings.apiKeys.fanApiKey?.trim()))
+const hasLipoApiKey = computed(() => Boolean(settingsStore.mainSettings.apiKeys.lipoApiKey?.trim()))
 
 const visibleSources = computed(() => Object.keys(dataSourceCatalog).filter(source => {
     const requiredCapability = dataSourceCatalog[source].requiredCapability
@@ -135,50 +123,15 @@ const providersFor = category => [...new Set(
     sourcesFor(category).flatMap(source => dataSourceCatalog[source].apis)
 )]
 
-const confirmFssn = () => ElMessageBox.confirm(
-    `FAN Studio Seismic Network (FSSN)是由FAN Studio提供支持，利用FDSN等地震仪网络进行全球地震测定的项目。
-    该项目由地震学爱好者组织维护，不属于任何官方机构，测定结果仅供参考。
-    请问您是否坚持使用？`,
-    '启用FSSN地震测定',
-    {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning',
-        showClose: false,
-    }
-)
-
-const canEnable = async (source, wasEnabled) => {
-    if(!settingsStore.isDataSourceAvailable(source)) return false
-    if(source != 'fssnEqlist' || wasEnabled) return true
-    try {
-        await confirmFssn()
-        return true
-    }
-    catch (_) {
-        return false
-    }
-}
-
-const toggleSource = async (source, enabled) => {
-    const previousApis = { ...settingsStore.mainSettings.dataSources[source] }
-    const wasEnabled = settingsStore.isDataSourceEnabled(source)
+const toggleSource = (source, enabled) => {
+    if(enabled && !settingsStore.isDataSourceAvailable(source)) return
     settingsStore.setDataSourceEnabled(source, enabled)
-    if(enabled && !await canEnable(source, wasEnabled)) {
-        Object.assign(settingsStore.mainSettings.dataSources[source], previousApis)
-        return
-    }
     emit('change')
 }
 
-const toggleApi = async (source, api, enabled) => {
-    const previousValue = settingsStore.mainSettings.dataSources[source][api]
-    const wasEnabled = settingsStore.isDataSourceEnabled(source)
+const toggleApi = (source, api, enabled) => {
+    if(enabled && !settingsStore.isDataSourceAvailable(source)) return
     settingsStore.mainSettings.dataSources[source][api] = enabled
-    if(enabled && !await canEnable(source, wasEnabled)) {
-        settingsStore.mainSettings.dataSources[source][api] = previousValue
-        return
-    }
     emit('change')
 }
 </script>
@@ -269,9 +222,6 @@ const toggleApi = async (source, api, enabled) => {
             gap: 8px;
         }
 
-        .cea-fan-level {
-            width: 82px;
-        }
 
         .el-checkbox {
             margin: 0;

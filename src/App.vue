@@ -75,8 +75,8 @@ const history2Eqlist = {
   'CENC': 'cencEqlist',
   'CWA': 'cwaEqlist',
   'JMA': 'jmaEqlist',
+  'KMA': 'kmaEqlist',
   'USGS': 'usgsEqlist',
-  'FSSN': 'fssnEqlist',
 }
 
 onBeforeMount(async () => {

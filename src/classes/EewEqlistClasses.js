@@ -376,13 +376,17 @@ export class EewEvent {
         this.clearReachBar()
     }
     update(eqMessage, time, isFirst = false){
+        const isAddition = eqMessage.source !== 'gqEew'
+            && eqMessage.reportNum == this.eqMessage.reportNum
+            && eqMessage.isCanceled == this.eqMessage.isCanceled
+            && eqMessage.type < this.eqMessage.type
         if(isFirst || eqMessage.reportNum > this.eqMessage.reportNum || 
         eqMessage.reportNum == this.eqMessage.reportNum && eqMessage.isCanceled > this.eqMessage.isCanceled || 
-        eqMessage.reportNum == this.eqMessage.reportNum && eqMessage.isCanceled == this.eqMessage.isCanceled && eqMessage.type < this.eqMessage.type) {
-            const isAddition = eqMessage.reportNum == this.eqMessage.reportNum && eqMessage.isCanceled == this.eqMessage.isCanceled && eqMessage.type < this.eqMessage.type
+        isAddition) {
             if(eqMessage.isCanceled) {
                 const { isCanceled, title, titleText, reportNum, reportNumText, reportTime, className } = eqMessage
                 Object.assign(this.eqMessage, { isCanceled, title, titleText, reportNum, reportNumText, reportTime, className })
+                if(eqMessage.source === 'gqEew' && eqMessage.quality != null) this.eqMessage.quality = eqMessage.quality
                 this.renderStop()
             }
             else {
@@ -595,8 +599,10 @@ export class EqlistEvent {
         this.smartSetView = smartSetView
     }
     update(eqMessage, time, isFirst = false){
-        if(isFirst || timeToStamp(eqMessage.reportTime, 0) > timeToStamp(this.eqMessage.reportTime, 0)
-        || timeToStamp(eqMessage.reportTime, 0) == timeToStamp(this.eqMessage.reportTime, 0) && timeToStamp(eqMessage.originTime, 0) > timeToStamp(this.eqMessage.originTime, 0)) {
+        const reportStamp = eqMessage.reportTimeStamp ?? timeToStamp(eqMessage.reportTime, 0)
+        const previousStamp = this.eqMessage.reportTimeStamp ?? timeToStamp(this.eqMessage.reportTime, 0)
+        if(isFirst || reportStamp > previousStamp
+        || reportStamp == previousStamp && timeToStamp(eqMessage.originTime, 0) > timeToStamp(this.eqMessage.originTime, 0)) {
             Object.assign(this.eqMessage, eqMessage)
             this.hypoLatLng = [this.eqMessage.lat, this.eqMessage.lng]
             this.isValidHypo = this.hypoLatLng.some(item => !!item)
@@ -653,7 +659,7 @@ export class EqlistEvent {
                     break
                 }
                 case 'cencEqlist':{
-                    if(eqMessage.title == '中国地震台网自动测定'){
+                    if(eqMessage.reviewType === 'automatic'){
                         playSound("hypocenter")
                     }
                     else{
@@ -662,25 +668,11 @@ export class EqlistEvent {
                     break
                 }
                 case 'usgsEqlist': {
-                    if(eqMessage.title == 'USGS自动测定'){
+                    if(eqMessage.reviewType === 'automatic'){
                         playSound("hypocenter")
                     }
                     else{
                         playSound("detail")
-                    }
-                    break
-                }
-                case 'fssnEqlist': {
-                    switch(eqMessage.title) {
-                        case 'FSSN自动测定': 
-                            playSound("hypocenter")
-                            break
-                        case 'FSSN正式测定':
-                            playSound("detail")
-                            break
-                        case 'FSSN取消测定':
-                            playSound("cancel")
-                            break
                     }
                     break
                 }
@@ -756,8 +748,7 @@ export class HistoryEvent extends EqlistEvent {
     createStations(data) {
         this.terminateStations()
         this.stations = markRaw([])
-        const stationData = data.instrument_intensity_json
-        stationData.forEach(item => {
+        data.forEach(item => {
             const station = markRaw(new intReportStation(this.map, item.stID, [item.stla, item.stlo], item))
             this.stations.push(station)
         })

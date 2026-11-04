@@ -68,7 +68,7 @@ try {
         displayLegend: false,
         masterVolume: 0,
         actionWhiteList: '',
-        apiKeys: { fanApiKey: 'test-key' },
+        apiKeys: { lipoApiKey: 'test-key' },
         displaySeisNet: { ...defaultMain.displaySeisNet, httpDataPriority: 'complete', palertHypoInfTextInfo: 2 },
         historySources: [],
         userLatLng: [31.2, 121.5],
@@ -81,17 +81,17 @@ try {
 
     settings.setMainSettings(JSON.stringify({
         unknown: true,
-        dataSources: { cwaEqlist: { fan: true, extraApi: false, trem: false }, unknownSource: { fan: true } },
+        dataSources: { cwaEqlist: { lipo: true, extraApi: false, trem: false }, unknownSource: { lipo: true } },
         displaySeisNet: { unknown: true, palertNet: true },
-        apiKeys: { fanApiKey: 'test-key', extraKey: 'ignored' },
+        apiKeys: { lipoApiKey: 'test-key', extraKey: 'ignored' },
         onEew: { sound: true, unknown: true },
     }))
     assert.equal(Object.hasOwn(settings.mainSettings, 'unknown'), false)
-    assert.deepEqual(snapshot(settings.mainSettings.dataSources.cwaEqlist), { fan: true })
+    assert.deepEqual(snapshot(settings.mainSettings.dataSources.cwaEqlist), { lipo: true })
     assert.equal(Object.hasOwn(settings.mainSettings.dataSources, 'unknownSource'), false)
     assert.equal(Object.hasOwn(settings.mainSettings.displaySeisNet, 'unknown'), false)
     assert.equal(settings.mainSettings.displaySeisNet.palertNet, true)
-    assert.deepEqual(snapshot(settings.mainSettings.apiKeys), { fanApiKey: 'test-key' })
+    assert.deepEqual(snapshot(settings.mainSettings.apiKeys), { lipoApiKey: 'test-key' })
     assert.deepEqual(snapshot(settings.mainSettings.onEew), { notification: false, sound: true, focus: false })
     assert.equal(settings.isDataSourceFullyEnabled('cwaEqlist'), true)
     assert.equal(settings.isDataSourcePartiallyEnabled('cwaEqlist'), false)
@@ -120,7 +120,7 @@ try {
         assert.deepEqual(snapshot(settings.advancedSettings), defaultAdvanced)
         assert.deepEqual(snapshot(access.capabilities), defaultAccess)
     }
-    settings.setMainSettings('{"masterVolume":1e999,"displayLegend":"false","actionWhiteList":[],"dataSources":{"cwaEqlist":{"fan":"false"}},"displaySeisNet":{"httpDataPriority":"invalid"}}')
+    settings.setMainSettings('{"masterVolume":1e999,"displayLegend":"false","actionWhiteList":[],"dataSources":{"cwaEqlist":{"lipo":"false"}},"displaySeisNet":{"httpDataPriority":"invalid"}}')
     assert.deepEqual(snapshot(settings.mainSettings), defaultMain)
     settings.setAdvancedSettings('{"defaultFanServer":"1","displayApiType":1,"mockEew":{}}')
     assert.deepEqual(snapshot(settings.advancedSettings), defaultAdvanced)
@@ -158,9 +158,9 @@ try {
     assert.equal(access.canUse('iclEew'), false, 'Local configuration is still required')
     assert.equal(access.canUse('advancedHypoInf'), true)
     access.setAccessSettings('{"advancedHypoInf":"true"}')
-    settings.setMainSettings('{"dataSources":{"iclEew":{"fan":true}},"displaySeisNet":{"tremNet":true,"niedHypoInfTextInfo":2,"palertHypoInfTextInfo":2}}')
+    settings.setMainSettings('{"dataSources":{"iclEew":{"lipo":true}},"displaySeisNet":{"tremNet":true,"niedHypoInfTextInfo":2,"palertHypoInfTextInfo":2}}')
     settings.resetUnauthorizedFeatureSettings()
-    assert.equal(settings.mainSettings.dataSources.iclEew.fan, false)
+    assert.equal(settings.mainSettings.dataSources.iclEew.lipo, false)
     assert.equal(settings.mainSettings.displaySeisNet.tremNet, false)
     assert.equal(settings.mainSettings.displaySeisNet.niedHypoInfTextInfo, 1)
     assert.equal(settings.mainSettings.displaySeisNet.palertHypoInfTextInfo, 1)
@@ -169,8 +169,8 @@ try {
     settings.setMainSettings('{"source":{"cwaEqlist":false,"jmaEew":true,"kmaEew":"true"}}')
     assert.deepEqual(snapshot(settings.mainSettings), defaultMain, 'Old source switches do not restore current API switches')
     settings.setMainSettings('{"source":{"cwaEqlist":true},"dataSources":{"cwaEqlist":{"fan":false,"trem":true},"iclEew":{"fan":true,"lipo":false}}}')
-    assert.deepEqual(snapshot(settings.mainSettings.dataSources.cwaEqlist), { fan: false })
-    assert.deepEqual(snapshot(settings.mainSettings.dataSources.iclEew), { fan: true })
+    assert.deepEqual(snapshot(settings.mainSettings.dataSources.cwaEqlist), { lipo: false })
+    assert.deepEqual(snapshot(settings.mainSettings.dataSources.iclEew), { lipo: false })
     for(const source of [true, 1, 'wrong', [], null]) {
         settings.setMainSettings(JSON.stringify({ source }))
         assert.deepEqual(snapshot(settings.mainSettings), defaultMain)
@@ -183,12 +183,13 @@ try {
     settings.setAdvancedSettings(localStorage.getItem('advancedSettings'))
     assert.deepEqual(snapshot(access.capabilities), defaultAccess, 'Old advanced settings cannot grant capabilities')
     assert.deepEqual(snapshot(settings.advancedSettings), defaultAdvanced)
-    assert.equal(settings.mainSettings.provinceCeaEew, false)
+    assert.equal(Object.hasOwn(settings.mainSettings, 'provinceCeaEew'), false)
     access.setAccessSettings(JSON.stringify(currentAccess))
     for(const enabled of [false, true]) {
-        settings.mainSettings.provinceCeaEew = enabled
+        settings.mainSettings.apiAuthAutoReconnect = enabled
         settings.setAdvancedSettings(JSON.stringify({ ...JSON.parse(obsoleteAdvanced), provinceCeaEew: !enabled, displayApiType: true }))
-        assert.equal(settings.mainSettings.provinceCeaEew, enabled, 'Old advanced settings cannot overwrite current main settings')
+        assert.equal(settings.mainSettings.apiAuthAutoReconnect, enabled, 'Old advanced settings cannot overwrite current main settings')
+        assert.equal(Object.hasOwn(settings.mainSettings, 'provinceCeaEew'), false)
         assert.deepEqual(snapshot(settings.advancedSettings), { ...defaultAdvanced, displayApiType: true })
         assert.deepEqual(snapshot(access.capabilities), currentAccess)
     }

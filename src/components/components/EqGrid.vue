@@ -102,12 +102,8 @@ watch(eqMessage, (newVal)=>{
     }
     else {
         let i = 0
-        const shouldUpdate = settingsStore.actionWhiteListArr.some(key => newVal.hypocenter.includes(key)) || newVal.source != 'fssnEqlist' && newVal.source != 'usgsEqlist'
-            || newVal.source == 'fssnEqlist'
-            && (newVal.title == 'FSSN正式测定' || newVal.title == 'FSSN自动测定' && settingsStore.mainSettings.fssnActionType == 0)
-            && (settingsStore.mainSettings.fssnActionMag == 0 || newVal.magnitude >= settingsStore.mainSettings.fssnActionMag)
-            || newVal.source == 'usgsEqlist'
-            && (settingsStore.mainSettings.usgsActionMag == 0 || newVal.magnitude >= settingsStore.mainSettings.usgsActionMag)
+        const shouldUpdate = settingsStore.actionWhiteListArr.some(key => newVal.hypocenter.includes(key)) || newVal.source != 'usgsEqlist'
+            || settingsStore.mainSettings.usgsActionMag == 0 || newVal.magnitude >= settingsStore.mainSettings.usgsActionMag
         while(i < eqlistList.length){
             if(newVal.source == eqlistList[i].eqMessage.source){
                 if(shouldUpdate) {

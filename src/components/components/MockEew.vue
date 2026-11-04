@@ -238,7 +238,7 @@ const submitScenario = () => {
     forms.forEach((form, index) => {
         const eqMessage = generateEqMessage(form, index, staticId)
         setTimeout(() => {
-            statusStore.setEqMessage('mockEew', eqMessage)
+            statusStore.setEqMessage('mockEew', eqMessage, 'mock')
         }, form.reportDelay * 1000);
     })
     statusStore.showMockDialog = false

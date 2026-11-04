@@ -1,7 +1,7 @@
 <template>
     <div class="outer">
         <div class="container">
-            <div class="info" v-for="(item, index) of eqlists" :key="index" :style="{
+            <div class="info" v-for="item of eqlists" :key="`${item.source}:${item.id}`" :style="{
                 border: `var(--${item.className}) 2px solid`
             }">
                 <div class="background" :class="item.className"></div>
@@ -25,15 +25,15 @@
                     <div class="location">{{ item.hypocenter || '震源 調査中' }}</div>
                     <div class="time">{{ item.originTime + ` (${formatTimeZone(item.timeZone)})` }}</div>
                     <div class="bottom">
-                        <div class="magnitude">M{{ item.magnitude ? item.magnitude.toFixed(1) : '不明' }}</div>
-                        <div class="depth">{{ item.depth.toFixed(0) }}km</div>
+                        <div class="magnitude">M{{ formatHistoryValue(item.magnitude, 1) }}</div>
+                        <div class="depth">{{ formatHistoryValue(item.depth, 0, 'km') }}</div>
                         <div class="source">{{ (item.intReportId ? '*' : '') + item.source }}</div>
                     </div>
                 </div>
                 <div class="buttons" @contextmenu.prevent="handleCopy(item)">
-                    <el-button class="button" type="warning" plain @click="openUrl(item.url)">查看网页</el-button>
+                    <el-button class="button" type="warning" plain :disabled="!item.url" @click="openUrl(item.url)">查看网页</el-button>
                     <el-button class="button" :type="isReplaying(item) ? 'danger' : 'primary'" plain @click="toggleReplay(item)">{{ isReplaying(item) ? '停止回放' : '测站回放' }}</el-button>
-                    <el-button class="button" :type="displayIds.has(item.id) ? 'danger' : 'success'" plain @click="displayOnMap(item)">{{ displayIds.has(item.id) ? '取消显示' : '地图显示' }}</el-button>
+                    <el-button class="button" :type="displayIds.has(item.id) ? 'danger' : 'success'" plain :disabled="!hasHypocenter(item)" @click="displayOnMap(item)">{{ displayIds.has(item.id) ? '取消显示' : '地图显示' }}</el-button>
                 </div>
             </div>
         </div>
@@ -64,6 +64,9 @@ const timeStore = useTimeStore()
 const smartSetView = inject('smartSetView')
 const historyList = inject('historyList')
 const activeEewList = inject('activeEewList')
+
+const formatHistoryValue = (value, digits, suffix = '') => Number.isFinite(value) ? value.toFixed(digits) + suffix : '不明'
+const hasHypocenter = item => Number.isFinite(item.lat) && Number.isFinite(item.lng)
 
 const maxHistoryNumber = 100
 const maxReplayDuration = 10 * 60 * 1000
@@ -104,7 +107,8 @@ const startReplay = (item) => {
     const passedTime = exactRound(Math.max(calcPassedTime(item.originTime, item.timeZone) / 60000 + replayLeadSeconds / 60, 0), 2)
     statusStore.seisNetReplayDelay = passedTime
     replayState.itemId = item.id
-    if (settingsStore.advancedSettings.mockOnReplay && settingsStore.advancedSettings.mockEew) {
+    if (settingsStore.advancedSettings.mockOnReplay && settingsStore.advancedSettings.mockEew
+        && hasHypocenter(item) && Number.isFinite(item.magnitude) && Number.isFinite(item.depth)) {
         createMockEew(item)
     }
     resetAutoStopTimer()
@@ -149,7 +153,8 @@ const stopReplay = (resetDelay = true) => {
     }
 }
 const handleCopy = async (item) => {
-    const content = `${item.hypocenter} ${item.originTime} (UTC${formatTimeZone(item.timeZone)}) M${item.magnitude ? item.magnitude.toFixed(1) : '不明'} ${item.depth.toFixed(0)}km ${item.useShindo ? ('最大震度' + formatShindo(item.maxIntensity, false)) : ('预估最大烈度' + item.maxIntensity)}`
+    const intensityTitle = item.intTitle || (item.useShindo ? '最大震度' : '预估最大烈度')
+    const content = `${item.hypocenter} ${item.originTime} (UTC${formatTimeZone(item.timeZone)}) M${formatHistoryValue(item.magnitude, 1)} ${formatHistoryValue(item.depth, 0, 'km')} ${intensityTitle}${item.useShindo ? formatShindo(item.maxIntensity, false) : item.maxIntensity}`
     try {
         if(isTauri()) {
             await writeText(content)
@@ -171,15 +176,17 @@ const handleCopy = async (item) => {
 }
 const displayIds = computed(() => new Set(historyList.map(event => event.eqMessage.id)))
 const displayOnMap = (item) => {
+    if(!hasHypocenter(item)) return
     const event = historyList.find(event => event.eqMessage.id == item.id)
     if(event) {
         event.deactivate()
     }
     else {
         const eqMessage = Object.assign({}, defaultEqMessage, item)
+        eqMessage.magnitude = eqMessage.magnitude ?? -1
         eqMessage.source = 'history'
         eqMessage.title = eqMessage.titleText = '历史地震 ' + `(${item.source})`
-        eqMessage.depthText = '深度: ' + eqMessage.depth.toFixed(0) + 'km'
+        eqMessage.depthText = '深度: ' + formatHistoryValue(eqMessage.depth, 0, 'km')
         eqMessage.reportTime = stampToTime(timeStore.getTimeStamp(), eqMessage.timeZone)
         if(!statusStore.map) return
         const newEvent = reactive(new HistoryEvent(statusStore.map, eqMessage, smartSetView, historyList))
@@ -221,7 +228,7 @@ const createMockEew = (item) => {
     replayState.mockTimer = setTimeout(() => {
         replayState.issued = true
         replayState.mockTimer = null
-        statusStore.setEqMessage('mockEew', eqMessage)
+        statusStore.setEqMessage('mockEew', eqMessage, 'mock')
     }, replayLeadSeconds * 1000);
 }
 </script>

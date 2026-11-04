@@ -37,7 +37,7 @@
                                     <div class="bottom">
                                         <div class="magnitude">{{ event.eqMessage.isAssumption?'仮定震源要素':'M' + event.eqMessage.magnitude.toFixed(1) }}</div>
                                         <div class="depth">{{ event.eqMessage.isAssumption?'':event.eqMessage.depthText }}</div>
-                                        <div class="type" v-if="settingsStore.advancedSettings.displayApiType">{{ sourceTypes[event.eqMessage.source][event.eqMessage.type] }}</div>
+                                        <div class="type" v-if="settingsStore.advancedSettings.displayApiType">{{ event.eqMessage.source === 'gqEew' ? gqQualityLabels[event.eqMessage.quality] ?? '?' : getProviderLabel(event.eqMessage) }}</div>
                                     </div>
                                 </div>
                                 <div class="eew-buttons" v-if="event.showMenu">
@@ -122,7 +122,7 @@
                                     <div class="bottom">
                                         <div class="magnitude">{{ event.eqMessage.magnitude != -1 ? 'M' + event.eqMessage.magnitude.toFixed(1) : '規模 調査中' }}</div>
                                         <div class="depth">{{ event.eqMessage.depth != -1 ? event.eqMessage.depthText : '' }}</div>
-                                        <div class="type" v-if="settingsStore.advancedSettings.displayApiType">{{ sourceTypes[event.eqMessage.source][event.eqMessage.type] }}</div>
+                                        <div class="type" v-if="settingsStore.advancedSettings.displayApiType">{{ getProviderLabel(event.eqMessage) }}</div>
                                     </div>
                                 </div>
                                 <div class="eew-buttons" v-if="event.showMenu">
@@ -295,7 +295,7 @@
                     <div class="ws-status">
                         <div>WebSocket状态: </div>
                         <div :class="'s' + webSocketStatus.wolfx.readyState">Wolfx{{ webSocketStatus.wolfx.urlIndex ? '(B)' : '' }}</div>
-                        <div :class="fanStatusClass">FAN{{ webSocketStatus.fan.urlIndex ? '(B)' : '' }}</div>
+                        <div :class="lipoStatusClass">Lipo</div>
                         <div :class="'s' + webSocketStatus.p2pquake.readyState">P2PQ{{ webSocketStatus.p2pquake.urlIndex ? '(B)' : '' }}</div>
                         <div v-if="accessStore.canUse('gqEew')" :class="'s' + webSocketStatus.gq.readyState">GQ{{ webSocketStatus.gq.urlIndex ? '(B)' : '' }}</div>
                     </div>
@@ -391,7 +391,7 @@ import 'leaflet/dist/leaflet.css';
 import '@/assets/background.css';
 import { ref, reactive, computed, onMounted, onBeforeUnmount, onUnmounted, watch, watchEffect, provide } from 'vue';
 import { HomeFilled, FullScreen, WarnTriangleFilled, InfoFilled, Setting } from '@element-plus/icons-vue';
-import { eewSources, eqlistSources, seisNetSources, sourceTypes, tsunamiSources, useStatusStore } from '@/stores/status';
+import { eewSources, eqlistSources, seisNetSources, getProviderLabel, tsunamiSources, useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
 import { useAccessStore } from '@/stores/access';
 import { useTimeStore } from '@/stores/time';
@@ -410,6 +410,7 @@ import { cnCityLabels, cnProvinceLabels, jpPrefLabels } from '@/utils/Labels';
 import terminator from '@joergdietrich/leaflet.terminator';
 import StatusComponent from './StatusComponent.vue';
 
+const gqQualityLabels = ['S', 'A', 'B', 'C', 'D', 'E', 'F']
 const style = window.getComputedStyle(document.body)
 const classNameColors = {}, tsunamiColors = {}
 classNameArray.forEach(color => classNameColors[color] = style.getPropertyValue(`--${color}`).trim())
@@ -507,9 +508,9 @@ const handleMenu = (index)=>{
 provide('handleHome', handleHome)
 const drawer = ref(null)
 const webSocketStatus = computed(() => statusStore.webSocketStatus)
-const fanStatusClass = computed(() => webSocketStatus.value.fan.readyState == 1 && statusStore.fanAuthStatus != 1
+const lipoStatusClass = computed(() => webSocketStatus.value.lipo.readyState == 1 && statusStore.lipoAuthStatus != 1
     ? 'incomplete'
-    : `s${webSocketStatus.value.fan.readyState}`
+    : `s${webSocketStatus.value.lipo.readyState}`
 )
 const palertUpdateTime = ref('1970-01-01 08:00:00')
 const palertMaxShindo = ref('?')
@@ -1461,6 +1462,7 @@ const resetDefaultMenuTimer = ()=>{
     clearTimeout(defaultMenuTimer)
     defaultMenuTimer = setTimeout(() => {
         menuId.value = defaultMenuId.value
+        statusStore.showStatusPanel = false
         setTimeout(() => {
             map.invalidateSize()
             if(isAutoZoom.value) setView()
@@ -1948,7 +1950,7 @@ onUnmounted(() => {
                         color: red;
                     }
                     .s4{
-                        color: white;
+                        display: none;
                     }
                 }
                 .update-time{

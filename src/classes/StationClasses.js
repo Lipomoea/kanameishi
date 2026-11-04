@@ -1214,6 +1214,7 @@ export class intReportStation {
         this.render()
     }
     render(){
+        const numberText = (value, digits) => Number.isFinite(value) ? value.toFixed(digits) : '不明'
         const zoom = this.map.getZoom()
         const iconZoom = Math.min(Math.max(zoom, 6), 10)
         const intIcon = intIcons[iconZoom][this.intensity]
@@ -1227,19 +1228,19 @@ export class intReportStation {
                 interactive: true
             }))
             this.marker.bindTooltip(`
-                <strong>${this.detail.stName} (${this.detail.stID})</strong>
+                <strong>${this.detail.stName || '不明'} (${this.detail.stID})</strong>
                 <br>
-                地点: ${this.detail.Province + this.detail.City + this.detail.County + this.detail.Town}
+                地点: ${[this.detail.Province, this.detail.City, this.detail.County, this.detail.Town].filter(Boolean).join('') || '不明'}
                 <br>
                 经纬度: ${this.detail.stla.toFixed(2)}°N, ${this.detail.stlo.toFixed(2)}°E
                 <br>
-                震中距: ${this.detail.Dist.toFixed(2)} km
+                震中距: ${numberText(this.detail.Dist, 2)} km
                 <br>
-                仪器烈度: ${this.detail.INT.toFixed(1)} (I_PGA: ${this.detail.IPGA.toFixed(1)}, I_PGV: ${this.detail.IPGV.toFixed(1)})
+                仪器烈度: ${numberText(this.detail.INT, 1)} (I_PGA: ${numberText(this.detail.IPGA, 1)}, I_PGV: ${numberText(this.detail.IPGV, 1)})
                 <br>
-                PGA: ${this.detail.PGA.toFixed(1)} gal
+                PGA: ${numberText(this.detail.PGA, 1)} gal
                 <br>
-                PGV: ${this.detail.PGV.toFixed(1)} kine
+                PGV: ${numberText(this.detail.PGV, 1)} kine
             `, { permanent: false, direction: 'top', className: 'custom-tooltip' })
             this.marker.addTo(this.map)
         }

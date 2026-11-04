@@ -1,5 +1,7 @@
+const retryIntervals = [1000, 2000, 5000, 10000, 30000]
+
 class WebSocketObj {
-    constructor(urls, autoMessages = [], initMessages = [...autoMessages], { resetRetryOnOpen = true } = {}) {
+    constructor(urls, autoMessages = [], initMessages = [...autoMessages], { resetRetryOnOpen = true, autoSendInterval = 30000 } = {}) {
         if (typeof (urls) == 'string') urls = [urls]
         this.urls = urls
         this.urlIndex = 0
@@ -8,18 +10,16 @@ class WebSocketObj {
         this.initMessages = initMessages
         this.resetRetryOnOpen = resetRetryOnOpen
         this.shouldConnect = true
-        this.minRetryInterval = 3000
-        this.maxRetryInterval = 10000
-        this.autoSendInterval = 10000
-        this.retryInterval = this.minRetryInterval
+        this.autoSendInterval = autoSendInterval
+        this.retryIndex = 0
         this.socket = new WebSocket(this.url)
         this.setupWebSocket()
     }
-    async sendMessages(messages) {
+    async sendMessages(messages, sendMessage = msg => this.send(msg)) {
         const currentSocket = this.socket
         for (const msg of messages) {
-            if (currentSocket != this.socket || currentSocket.readyState != 1) return
-            this.send(msg)
+            if (!this.shouldConnect || currentSocket != this.socket || currentSocket.readyState != 1) return
+            sendMessage(msg)
             await new Promise(resolve => setTimeout(resolve, Math.min(this.autoSendInterval / messages.length, 2000)))
         }
     }
@@ -37,7 +37,7 @@ class WebSocketObj {
                 this.msgTimer = setInterval(() => this.sendMessages(this.autoMessages), this.autoSendInterval)
             }
         }
-        this.socket.onclose = () => this.retryAfterFailure()
+        this.socket.onclose = event => this.retryAfterFailure(event)
         if (this.messageHandler)
             this.socket.onmessage = this.messageHandler
     }
@@ -55,9 +55,9 @@ class WebSocketObj {
         if (this.stateHandler) this.stateHandler(readyState, this.urlIndex)
     }
     resetRetryInterval() {
-        this.retryInterval = this.minRetryInterval
+        this.retryIndex = 0
     }
-    retryAfterFailure() {
+    retryAfterFailure(event) {
         if (!this.shouldConnect || this.reconnectTimer != null) return
         clearInterval(this.msgTimer)
         clearTimeout(this.connectTimer)
@@ -69,9 +69,9 @@ class WebSocketObj {
             this.socket.onmessage = null
             this.socket.close()
         }
-        if (this.closeHandler) this.closeHandler()
+        if (this.closeHandler) this.closeHandler(event)
         if (!this.shouldConnect) return
-        if (this.retryInterval >= this.maxRetryInterval) {
+        if (this.retryIndex === retryIntervals.length - 1) {
             this.urlIndex = (this.urlIndex + 1) % this.urls.length
             this.url = this.urls[this.urlIndex]
         }
@@ -79,8 +79,8 @@ class WebSocketObj {
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null
             if (this.shouldConnect) this.reconnect()
-        }, this.retryInterval)
-        this.retryInterval = Math.min(this.retryInterval + 1000, this.maxRetryInterval)
+        }, retryIntervals[this.retryIndex])
+        this.retryIndex = Math.min(this.retryIndex + 1, retryIntervals.length - 1)
     }
     reconnect() {
         if (!this.shouldConnect) return
@@ -123,3 +123,145 @@ class WebSocketObj {
 }
 
 export default WebSocketObj
+
+// Provider clients share the transport, but own their wire protocol.
+class JsonWebSocketClient {
+    constructor(urls, autoMessages = [], initMessages = autoMessages, options = {}) {
+        this.transport = new WebSocketObj(urls, autoMessages, initMessages, options)
+        this.transport.setMessageHandler(event => {
+            let message
+            try {
+                message = JSON.parse(event.data)
+            } catch {
+                return
+            }
+            if (message && typeof message === 'object') this.handleMessage(message)
+        })
+        this.transport.setCloseHandler(event => this.handleClose(event))
+    }
+    get shouldConnect() { return this.transport.shouldConnect }
+    setMessageHandler(handler) { this.messageHandler = handler }
+    setCloseHandler(handler) { this.closeHandler = handler }
+    setStateHandler(handler) { this.transport.setStateHandler(handler) }
+    handleMessage(message) { this.messageHandler?.(message) }
+    handleClose(event) { this.closeHandler?.(event) }
+    close() { this.transport.close() }
+}
+
+export class WolfxClient extends JsonWebSocketClient {
+    constructor(urls, sources) {
+        super(urls, sources.map(source => source === 'ceaEew' ? 'query_cenceew' : `query_${source.toLowerCase()}`))
+    }
+}
+
+export class P2pQuakeClient extends JsonWebSocketClient {
+    constructor(urls) { super(urls, ['ping']) }
+}
+
+export class GlobalQuakeClient extends JsonWebSocketClient {
+    constructor(urls) { super(urls, ['ping']) }
+}
+
+const lipoReportRequests = new Set(['cenc_report_list', 'cwa_report_list', 'kma_report_list', 'usgs_report_list'])
+const lipoAuthenticationErrors = new Set(['AUTH_FAILED', 'PATH_FORBIDDEN'])
+const lipoProtocolErrors = new Set([
+    'AUTH_MESSAGE_INVALID', 'AUTH_MESSAGE_TOO_LARGE', 'REQUEST_FORBIDDEN',
+    'unsupported request', 'report source unavailable', 'heartbeat reply required',
+    'text messages required', 'invalid heartbeat JSON',
+])
+
+export class LipoApiClient extends JsonWebSocketClient {
+    constructor(urls, { key, reportRequests = [], autoReconnectOnAuthFail = false, pews = false } = {}) {
+        super(urls, [], [JSON.stringify({ type: 'auth', key })], { resetRetryOnOpen: false })
+        this.authenticated = false
+        this.ready = false
+        this.pews = pews
+        this.autoReconnectOnAuthFail = autoReconnectOnAuthFail
+        this.reportRequests = [...new Set(reportRequests)].filter(type => lipoReportRequests.has(type))
+        this.availableSources = new Set()
+        this.pendingRequests = new Map()
+        this.pendingListRefreshes = new Set()
+    }
+    handleMessage(message) {
+        const { type, data } = message
+        if (type === 'auth_ok') {
+            this.authenticated = true
+            this.lastError = null
+            this.transport.resetRetryInterval()
+        } else if (type === 'error') {
+            this.lastError = data
+            super.handleMessage(message)
+            if (this.shouldStop(data?.code)) this.close()
+            else this.transport.retryAfterFailure({ code: 0, reason: data?.code || '' })
+            return
+        } else if (!this.authenticated) {
+            return
+        } else if (type === 'heartbeat') {
+            if (typeof data?.id === 'string') {
+                this.transport.send(JSON.stringify({ type: 'heartbeat', data: { id: data.id } }))
+            }
+            return
+        } else if (!this.pews && (type === 'init' || type === 'query_all')) {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) return
+            this.availableSources = new Set(Object.keys(data))
+            this.pendingRequests.delete(type)
+            // Deliver the snapshot (including cenc_ir) before requesting report lists.
+            super.handleMessage(message)
+            if (type === 'init' && this.shouldConnect && this.authenticated) {
+                this.ready = true
+                this.requestBatch(this.reportRequests)
+                clearInterval(this.queryTimer)
+                this.queryTimer = setInterval(
+                    () => this.requestBatch([...this.reportRequests, 'query_all']),
+                    this.transport.autoSendInterval,
+                )
+            }
+            return
+        } else {
+            this.pendingRequests.delete(type)
+        }
+        super.handleMessage(message)
+        const reportList = `${type}_list`
+        if (lipoReportRequests.has(reportList)) this.request(reportList, { refresh: true })
+        else if (this.pendingListRefreshes.delete(type)) this.request(type)
+    }
+    requestBatch(types) {
+        const requests = types.filter(type => type === 'query_all' || this.availableSources.has(type.replace(/_list$/, '')))
+        // Check pending requests at send time, after the shared transport's stagger delay.
+        return this.transport.sendMessages(requests, type => this.request(type))
+    }
+    request(type, { refresh = false } = {}) {
+        if (!this.ready || !this.authenticated || this.pews || !this.shouldConnect) return
+        if (type !== 'query_all' && (!this.reportRequests.includes(type) || !this.availableSources.has(type.replace(/_list$/, '')))) return
+        const pendingSince = this.pendingRequests.get(type)
+        if (pendingSince !== undefined && Date.now() - pendingSince < 30000) {
+            // The in-flight snapshot may predate this push; refresh once it arrives.
+            if (refresh) this.pendingListRefreshes.add(type)
+            return
+        }
+        this.pendingListRefreshes.delete(type)
+        this.pendingRequests.set(type, Date.now())
+        this.transport.send(JSON.stringify({ type }))
+    }
+    shouldStop(code) {
+        return lipoProtocolErrors.has(code)
+            || (lipoAuthenticationErrors.has(code) && !this.autoReconnectOnAuthFail)
+    }
+    handleClose(event) {
+        this.authenticated = false
+        this.ready = false
+        clearInterval(this.queryTimer)
+        this.pendingRequests.clear()
+        this.pendingListRefreshes.clear()
+        if (!this.lastError && event?.reason && (lipoAuthenticationErrors.has(event.reason) || lipoProtocolErrors.has(event.reason))) {
+            this.lastError = { code: event.reason, message: event.reason }
+            super.handleMessage({ type: 'error', data: this.lastError })
+        }
+        if (event && this.shouldStop(event.reason)) {
+            // The transport checks this flag before scheduling its next retry.
+            this.transport.shouldConnect = false
+            this.transport.notifyState(3)
+        }
+        super.handleClose(event)
+    }
+}

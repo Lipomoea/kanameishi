@@ -554,31 +554,6 @@
                             />
                         </div>
                         <div class="switch-full">
-                            <span>FSSN事件接收类型</span>
-                            <el-select
-                                style="width: 120px;"
-                                v-model="settingsStore.mainSettings.fssnActionType"
-                                size="small"
-                            >
-                                <el-option label="自动和正式测定" :value=0 />
-                                <el-option label="仅正式测定" :value=1 />
-                            </el-select>
-                        </div>
-                        <div class="switch-full">
-                            <div class="justify-between" style="width: 10rem;">
-                                <span>FSSN震级阈值</span>
-                                <div class="mag" :class="setClassName(calcCsisLevel(settingsStore.mainSettings.fssnActionMag, 10, 0), false)">
-                                    {{ settingsStore.mainSettings.fssnActionMag.toFixed(1) }}
-                                </div>
-                            </div>
-                            <el-slider
-                                v-model="settingsStore.mainSettings.fssnActionMag"
-                                :min="0" :max="9"
-                                :step="0.1"
-                                size="small"
-                            />
-                        </div>
-                        <div class="switch-full">
                             <span>
                                 地名白名单
                                 <el-popover
@@ -1144,18 +1119,6 @@
                 <div class="group">
                     <div class="switch-group">
                         <div class="switch-full">
-                            <span>首选FAN Studio API服务器</span>
-                            <el-select 
-                                v-model="settingsStore.advancedSettings.defaultFanServer"
-                                size="small"
-                                style="width: 72px;"
-                                @change="handleNeedReload"
-                            >
-                                <el-option label=".tech" :value="0" />
-                                <el-option label=".hk" :value="1" />
-                            </el-select>
-                        </div>
-                        <div class="switch-full">
                             <span>显示API名称</span>
                             <el-switch v-model="settingsStore.advancedSettings.displayApiType" />
                         </div>
@@ -1391,10 +1354,10 @@
         </el-dialog>
         <el-dialog v-model="showApiKeyManager" title="管理 API Key" width="min(460px, 92vw)" top="20vh" :show-close="false" append-to-body>
             <el-form :model="settingsStore.mainSettings.apiKeys">
-                <el-form-item label="FAN Studio API" label-width="110px">
+                <el-form-item label="Lipo API" label-width="110px">
                     <div class="api-key-field">
-                        <el-input v-model="settingsStore.mainSettings.apiKeys.fanApiKey" @change="handleNeedReload" />
-                        <el-button type="primary" @click="openUrl('https://api.fanstudio.tech/dev-platform/')">
+                        <el-input v-model="settingsStore.mainSettings.apiKeys.lipoApiKey" @change="handleNeedReload" />
+                        <el-button type="primary" @click="openUrl('https://api.lipomoea.cn/apply/')">
                             <el-icon><TopRight /></el-icon>
                             <span>前往申请</span>
                         </el-button>
@@ -1424,7 +1387,7 @@
             <div class="title">使用方法</div>
             <div class="about">
                 <p>Windows 10、macOS 11、Ubuntu 22.04及以上64位系统用户推荐使用应用程序：<a href="https://github.com/Lipomoea/kanameishi/releases" target="_blank">应用程序下载</a>&nbsp;<a href="https://gitee.com/lipomoea/kanameishi/releases" target="_blank">备用链接</a></p>
-                <p>主要功能：接收中国、日本、韩国地震预警速报，接收中国、日本、韩国等区域性地震信息以及美国地质调查局（USGS）、FAN Studio地震网络（FSSN）等机构的全球性地震信息，接收日本的海啸信息，显示日本、韩国部分机构的实时地震监测网络并提示可能的地震事件。</p>
+                <p>主要功能：接收中国、日本、韩国地震预警速报，接收中国、日本、韩国等区域性地震信息以及美国地质调查局（USGS）的全球性地震信息，接收日本的海啸信息，显示日本、韩国部分机构的实时地震监测网络并提示可能的地震事件。</p>
                 <p>通知推送：需授予通知权限。Chrome：点击网页链接左侧按钮-网站设置-通知-允许，刷新页面。</p>
                 <p>播放声音：需开启声音权限。Chrome：点击网页链接左侧按钮-网站设置-声音-允许，刷新页面。</p>
             </div>
@@ -1447,7 +1410,7 @@
             <div class="title">常见问题</div>
             <div class="about">
                 <p>关于烈度：中国大陆及港澳、韩国使用烈度制（12度表，I ~ XII），日本、中国台湾地区使用震度制（10度表，0 ~ 7，其中震度5、6两级分为强/弱）。部分数值为预估值，非实测值。</p>
-                <p>关于时间：除全球性台网（USGS、FSSN）显示为中国标准时间，其他均显示为发报机构当地时间。</p>
+                <p>关于时间：除全球性台网（USGS）显示为中国标准时间，其他均显示为发报机构当地时间。</p>
                 <p>关于延迟：受API及服务器限制，部分资料具有延迟是正常现象。</p>
                 <p>关于地图：由于服务器带宽限制，进入页面后需要一定时间加载地图。如长时间未加载地图，请刷新页面。</p>
             </div>
