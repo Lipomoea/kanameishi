@@ -483,7 +483,12 @@ const eewInfoTotalPages = computed(() => Math.ceil(activeEewList.length / events
 const currentEewInfoPage = computed(() => Math.floor(infoPageCounter.value / 10) % eewInfoTotalPages.value)
 const currentEewInfoItems = computed(() => activeEewList.slice(eventsPerPage.value * currentEewInfoPage.value, eventsPerPage.value * (currentEewInfoPage.value + 1)))
 const eqlistInfoTotalPages = computed(() => Math.ceil(displayEqlistList.value.length / eventsPerPage.value))
-const currentEqlistInfoPage = computed(() => Math.floor(infoPageCounter.value / 10) % eqlistInfoTotalPages.value)
+const tempEqlistInfoPage = computed(() => {
+    if(!tempEqlists.value) return null
+    const index = displayEqlistList.value.findIndex(event => event.eqMessage.source == tempEqlists.value)
+    return index < 0 ? null : Math.floor(index / eventsPerPage.value)
+})
+const currentEqlistInfoPage = computed(() => tempEqlistInfoPage.value ?? Math.floor(infoPageCounter.value / 10) % eqlistInfoTotalPages.value)
 const currentEqlistInfoItems = computed(() => displayEqlistList.value.slice(eventsPerPage.value * currentEqlistInfoPage.value, eventsPerPage.value * (currentEqlistInfoPage.value + 1)))
 const handleManual = ()=>{
     isAutoZoom.value = false
@@ -561,8 +566,12 @@ provide('historyList', historyList)
 const clearHistoryList = () => {
     while(historyList.length > 0) historyList[0].deactivate()
 }
-watch(() => `${activeEewList.length}|${displayEqlistList.value.length}|${menuId.value}`, () => {
-    infoPageCounter.value = 0
+watch([
+    () => `${activeEewList.length}|${displayEqlistList.value.length}|${menuId.value}`,
+    tempEqlistInfoPage,
+], ([layout, tempPage], [previousLayout]) => {
+    if(tempPage !== null) infoPageCounter.value = tempPage * 10
+    else if(layout !== previousLayout) infoPageCounter.value = 0
 })
 const jmaTsunamiWarnArea = computed(() => {
     const warnArea = JSON.parse(statusStore.tsunamiMessage.jmaTsunami.warnArea)
@@ -1234,7 +1243,7 @@ watchEffect(() => {
 const intervalEvents = ()=>{
     blinkStatus.value = !blinkStatus.value
     tsunamiFlickerCounter = (tsunamiFlickerCounter + 1) % 6
-    infoPageCounter.value = (infoPageCounter.value + 1) % 25200
+    if(!tempEqlists.value) infoPageCounter.value = (infoPageCounter.value + 1) % 25200
     tsunamiBasePane.style.opacity = (tsunamiFlickerCounter ? 1 : 0) * (menuId.value == 'eews' ? 0.3 : 1)
     isPalertDelayed.value = !verifyUpToDate(palertUpdateTime.value, 8, 20000)
     isTremDelayed.value = !verifyUpToDate(tremUpdateTime.value, 8, 10000)
