@@ -422,7 +422,7 @@ const timeStore = useTimeStore()
 const currentTimeText = computed(() => stampToTime(timeStore.currentTimeStamp, systemTimeZone))
 let map, jpEewBaseMap, krEewBaseMap, cnEewBaseMap, jpTsunamiBaseMap, cnTsunamiBaseMap, labelLayer1, labelLayer2, terminatorLayer, terminatorFillLayer, cnFaultBaseMap
 let eewBaseGroup, tsunamiBaseGroup
-let eewMarkerPane, eqlistMarkerPane, eewReachPane, historyMarkerPane, wavePane, waveFillPane, taiwanGridPane, niedGridPane, kmaGridPane, eewBasePane, tsunamiBasePane, labelPane1, labelPane2
+let userPane, eewMarkerPane, eqlistMarkerPane, eewReachPane, historyMarkerPane, wavePane, waveFillPane, taiwanGridPane, niedGridPane, kmaGridPane, eewBasePane, tsunamiBasePane, labelPane1, labelPane2
 let userMarker
 const defaultLatLng = [38.1, 104.6]
 const { isValidUserLatLng, isValidViewLatLng, isDisplayUser, nearestJmaLoc } = storeToRefs(settingsStore)
@@ -722,7 +722,8 @@ onMounted(()=>{
         map.getPane(`intReportStationPane${i}`).style.zIndex = i + 75
     }
     map.createPane('userPane')
-    map.getPane('userPane').style.zIndex = 100
+    userPane = map.getPane('userPane')
+    userPane.style.zIndex = 100
     map.createPane('terminatorPane')
     map.getPane('terminatorPane').style.zIndex = 130
     map.createPane('taiwanGridPane')
@@ -1235,6 +1236,7 @@ watchEffect(() => {
     const menuOpac = menuId.value == 'eqlists' ? 0.3 : 1
     // 你不许使用可选链符号（不然报错）
     if(eewMarkerPane) eewMarkerPane.style.opacity = blinkOpac * menuOpac
+    if(userPane) userPane.style.opacity = activeEewList.length > 0 ? 1 - blinkOpac : 1
     const alwaysDisplayGrid = settingsStore.mainSettings.displaySeisNet.alwaysDisplayGrid
     if(taiwanGridPane) taiwanGridPane.style.opacity = blinkOpac * menuOpac * (shouldDisplayNetworkGrid('taiwanGridPane', statusStore.isActive, alwaysDisplayGrid) ? 1 : 0)
     if(niedGridPane) niedGridPane.style.opacity = blinkOpac * menuOpac * (shouldDisplayNetworkGrid('niedGridPane', statusStore.isActive, alwaysDisplayGrid) ? 1 : 0)
