@@ -29,7 +29,11 @@ const setup = () => {
     }
     const { store, sourceTypes, getProviderLabel } = evaluateStore('src/stores/status.js', 'useStatusStore', {
         ...dataSources, ...usgsData, defineStore, Http: http,
-        eqUrls: { cencIr_http: 'https://example.test/cenc-ir', usgsEqlist_http: 'https://example.test/feed' },
+        eqUrls: {
+            cencIr_http: 'https://example.test/cenc-ir', usgsEqlist_http: 'https://example.test/feed',
+            jmaEqlist_http: 'https://example.test/quake',
+        },
+        tsunamiUrls: { jmaTsunami_http: 'https://example.test/tsunami' },
         iconUrls: {}, isTauri: () => false, useSettingsStore: () => settings,
         systemTimeZone: 8, timeToStamp, stampToTime,
         convertTimeString: (value, zone) => stampToTime(timeToStamp(value, zone), 8),
@@ -61,6 +65,128 @@ const cencIrRow = (overrides = {}) => ({
     Province: '西藏', Town: null, evName: '西藏那曲市巴青县', evdp: 10, evla: 31.93, evlo: 94.12,
     network: 'XZ', stID: '0001', stName: ' 测试站 ', stla: 31.8, stlo: 94.2, tag: 0,
     ...overrides,
+})
+
+const setupHttpPolling = t => {
+    let now = 0, clockOffset = 0, nextTimerId = 0
+    const timers = new Map(), requests = []
+    t.mock.method(Date, 'now', () => now + clockOffset)
+    t.mock.method(globalThis, 'setInterval', (callback, delay) => {
+        const id = ++nextTimerId
+        timers.set(id, { callback, delay, at: now + delay })
+        return id
+    })
+    t.mock.method(globalThis, 'clearInterval', id => timers.delete(id))
+    const { store, http } = setup()
+    store.configureDataSources({
+        jmaEqlist: { p2pquake: true }, jmaTsunami: { p2pquake: true }, usgsEqlist: { usgs: true },
+    })
+    http.get = async url => { requests.push({ path: new URL(url).pathname, at: Date.now() }) }
+    t.after(() => store.disconnect())
+    const advance = async ms => {
+        const until = now + ms
+        while (true) {
+            const timer = [...timers.values()].sort((a, b) => a.at - b.at)[0]
+            if (!timer || timer.at > until) break
+            now = timer.at
+            timer.at += timer.delay
+            await timer.callback()
+        }
+        now = until
+    }
+    const times = path => requests.filter(request => request.path === path).map(request => request.at)
+    return { store, advance, times, setClockOffset: offset => { clockOffset = offset } }
+}
+
+test('P2PQuake HTTP intervals follow the connection at request time, independently of cached message IDs', async t => {
+    const { store, advance, times } = setupHttpPolling(t)
+    store.eqMessage.jmaEqlist.id = 'cached-quake'
+    store.tsunamiMessage.jmaTsunami.id = 'cached-tsunami'
+    store.webSocketStatus.p2pquake.readyState = 0
+    store.connect('http')
+    await advance(4000)
+    assert.deepEqual(times('/quake'), [1000, 3000])
+    assert.deepEqual(times('/tsunami'), [2000, 4000])
+
+    store.webSocketStatus.p2pquake.readyState = 1
+    store.eqMessage.jmaEqlist.id = ''
+    store.tsunamiMessage.jmaTsunami.id = ''
+    await advance(2000)
+    store.webSocketStatus.p2pquake.readyState = 3
+    await advance(28000)
+    assert.deepEqual(times('/quake'), [1000, 3000, 5000])
+    assert.deepEqual(times('/tsunami'), [2000, 4000, 6000])
+    await advance(4000)
+    assert.deepEqual(times('/quake'), [1000, 3000, 5000, 35000, 37000])
+    assert.deepEqual(times('/tsunami'), [2000, 4000, 6000, 36000, 38000])
+})
+
+test('USGS HTTP uses 30 ticks only when Lipo is connected and authenticated at request time', async t => {
+    const { store, advance, times } = setupHttpPolling(t)
+    store.webSocketStatus.lipo.readyState = 1
+    store.lipoAuthStatus = -1
+    store.connect('http')
+    await advance(6000)
+    assert.deepEqual(times('/feed'), [1000, 6000])
+
+    store.lipoAuthStatus = 1
+    await advance(5000)
+    store.lipoAuthStatus = 0
+    await advance(29000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000])
+    await advance(1000)
+    store.webSocketStatus.lipo.readyState = 3
+    store.lipoAuthStatus = 1
+    await advance(5000)
+    store.webSocketStatus.lipo.readyState = 1
+    await advance(5000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000, 51000])
+    await advance(30000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000, 51000, 81000])
+})
+
+test('HTTP polling counts callbacks without waiting an extra tick when clock readings are 1 ms early', async t => {
+    const { store, advance, times, setClockOffset } = setupHttpPolling(t)
+    store.connect('http')
+    await advance(1000)
+    setClockOffset(-1)
+    await advance(5000)
+    assert.deepEqual(times('/quake'), [1000, 2999, 4999])
+    assert.deepEqual(times('/tsunami'), [1999, 3999, 5999])
+    assert.deepEqual(times('/feed'), [1000, 5999])
+
+    store.webSocketStatus.p2pquake.readyState = 1
+    store.webSocketStatus.lipo.readyState = 1
+    store.lipoAuthStatus = 1
+    await advance(5000)
+    setClockOffset(-2)
+    await advance(30000)
+    assert.deepEqual(times('/quake'), [1000, 2999, 4999, 6999, 36998])
+    assert.deepEqual(times('/tsunami'), [1999, 3999, 5999, 7999, 37998])
+    assert.deepEqual(times('/feed'), [1000, 5999, 10999, 40998])
+})
+
+test('HTTP polling respects provider switches and replaces or stops its schedule on reconnect or disconnect', async t => {
+    const { store, advance, times } = setupHttpPolling(t)
+    store.configureDataSources({ jmaEqlist: { p2pquake: false, lipo: true }, usgsEqlist: { usgs: false, lipo: true } })
+    store.connect('http')
+    await advance(3000)
+    assert.deepEqual(times('/quake'), [])
+    assert.deepEqual(times('/tsunami'), [])
+    assert.deepEqual(times('/feed'), [])
+
+    store.configureDataSources({ jmaEqlist: { p2pquake: true }, jmaTsunami: { p2pquake: true }, usgsEqlist: { usgs: true } })
+    store.connect('http')
+    store.connect('http')
+    await advance(2000)
+    assert.deepEqual(times('/quake'), [4000])
+    assert.deepEqual(times('/tsunami'), [5000])
+    assert.deepEqual(times('/feed'), [4000])
+    store.disconnect()
+    await advance(60000)
+    assert.deepEqual(times('/quake'), [4000])
+    assert.deepEqual(times('/tsunami'), [5000])
+    assert.deepEqual(times('/feed'), [4000])
 })
 
 test('Lipo applies source-specific zero fallbacks while preserving report depths and time zones', () => {

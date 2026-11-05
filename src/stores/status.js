@@ -1101,21 +1101,31 @@ export const useStatusStore = defineStore('statusStore', {
         },        
         connect(protocol){
             if(protocol == 'http'){
-                let status = -1
+                let tick = 0
+                const nextRequestTick = {
+                    jmaEqlist: 1,
+                    jmaTsunami: 2,
+                    usgsEqlist: 1,
+                }
                 clearInterval(this.httpRequest)
                 this.httpRequest = setInterval(async () => {
+                    tick++
                     const stamp = Date.now()
-                    status = (status + 1) % 60
                     const promises = this.enabledSource.map(async source=>{
-                        if(source == 'jmaEqlist' && this.isApiEnabled(source, 'p2pquake') && status % 2 == 0 && (!this.eqMessage[source].id || status % 10 == 0)) {
+                        // Count timer callbacks and choose the next tick before awaiting the HTTP response.
+                        if(source == 'jmaEqlist' && this.isApiEnabled(source, 'p2pquake') && tick >= nextRequestTick[source]) {
+                            nextRequestTick[source] = tick + (this.webSocketStatus.p2pquake.readyState === 1 ? 30 : 2)
                             const data = await Http.get(eqUrls.jmaEqlist_http)
                             if(data && data.length > 0) this.setEqMessage(source, data[0], 'p2pquake')
                         }
-                        if(source == 'jmaTsunami' && this.isApiEnabled(source, 'p2pquake') && status % 2 == 1 && (!this.tsunamiMessage[source].id || status % 10 == 1)) {
+                        if(source == 'jmaTsunami' && this.isApiEnabled(source, 'p2pquake') && tick >= nextRequestTick[source]) {
+                            nextRequestTick[source] = tick + (this.webSocketStatus.p2pquake.readyState === 1 ? 30 : 2)
                             const data = await Http.get(tsunamiUrls.jmaTsunami_http)
                             if(data && data.length > 0) this.setTsunamiMessage(source, data[0])
                         }
-                        if(source == 'usgsEqlist' && this.isApiEnabled(source, 'usgs') && status % 10 == 0) {
+                        if(source == 'usgsEqlist' && this.isApiEnabled(source, 'usgs') && tick >= nextRequestTick[source]) {
+                            const lipoReady = this.webSocketStatus.lipo.readyState === 1 && this.lipoAuthStatus === 1
+                            nextRequestTick[source] = tick + (lipoReady ? 30 : 5)
                             await this.fetchUsgsReports(stamp)
                         }
                     })
