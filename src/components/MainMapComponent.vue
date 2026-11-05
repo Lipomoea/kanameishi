@@ -1236,7 +1236,7 @@ watchEffect(() => {
     const menuOpac = menuId.value == 'eqlists' ? 0.3 : 1
     // 你不许使用可选链符号（不然报错）
     if(eewMarkerPane) eewMarkerPane.style.opacity = blinkOpac * menuOpac
-    if(userPane) userPane.style.opacity = activeEewList.length > 0 ? 1 - blinkOpac : 1
+    if(userPane) userPane.style.opacity = activeEewList.length > 0 ? blinkOpac : 1
     const alwaysDisplayGrid = settingsStore.mainSettings.displaySeisNet.alwaysDisplayGrid
     if(taiwanGridPane) taiwanGridPane.style.opacity = blinkOpac * menuOpac * (shouldDisplayNetworkGrid('taiwanGridPane', statusStore.isActive, alwaysDisplayGrid) ? 1 : 0)
     if(niedGridPane) niedGridPane.style.opacity = blinkOpac * menuOpac * (shouldDisplayNetworkGrid('niedGridPane', statusStore.isActive, alwaysDisplayGrid) ? 1 : 0)
