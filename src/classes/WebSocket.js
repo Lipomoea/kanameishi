@@ -183,13 +183,6 @@ export class LipoApiClient extends JsonWebSocketClient {
         this.pendingRequests = new Map()
         this.pendingListRefreshes = new Set()
     }
-    handleData(data) {
-        if (data === 'ping') {
-            if (this.authenticated && !this.pews) this.transport.send('pong')
-            return
-        }
-        super.handleData(data)
-    }
     handleMessage(message) {
         const { type, data } = message
         if (type === 'auth_ok') {
@@ -205,6 +198,9 @@ export class LipoApiClient extends JsonWebSocketClient {
         } else if (!this.authenticated) {
             return
         } else if (type === 'heartbeat') {
+            if (!this.pews && typeof data?.id === 'string' && data.id.length > 0) {
+                this.transport.send(JSON.stringify({ type: 'heartbeat', data: { id: data.id } }))
+            }
             return
         } else if (!this.pews && (type === 'init' || type === 'query_all')) {
             if (!data || typeof data !== 'object' || Array.isArray(data)) return

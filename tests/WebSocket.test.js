@@ -214,7 +214,7 @@ test('authentication success on one connection does not reset another connection
     assert.notEqual(first.socket, failedSocket)
 })
 
-test('Lipo waits for authentication and init, queries only visible requested lists, and answers text pings', async t => {
+test('Lipo waits for authentication and init, queries only visible requested lists, and echoes JSON heartbeat IDs', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/all', {
         key: 'test-key', reportRequests: ['cenc_report_list', 'cwa_report_list', 'usgs_report_list', 'kma_report_list'],
@@ -234,8 +234,8 @@ test('Lipo waits for authentication and init, queries only visible requested lis
     const snapshot = { cenc_report: { type: 'cenc_report', data: null }, cenc_ir: { type: 'cenc_ir', data: [] } }
     socket.receive({ type: 'init', data: snapshot })
     assert.deepEqual(socket.sent.map(JSON.parse).slice(1), [{ type: 'cenc_report_list' }])
-    socket.receiveText('ping')
-    assert.equal(socket.sent.at(-1), 'pong')
+    socket.receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678400000 } })
+    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'heartbeat', data: { id: '1' } })
     socket.receive({ type: 'cenc_report_list', data: [] })
     const before = socket.sent.length
     await advance(29999)
@@ -251,7 +251,7 @@ test('Lipo waits for authentication and init, queries only visible requested lis
     assert.equal(received.filter(message => message.type === 'query_all').length, 1)
 })
 
-test('Lipo replies only to exact authenticated text pings and keeps heartbeat traffic out of business messages', async t => {
+test('Lipo echoes authenticated string heartbeat IDs, ignores text pings and invalid IDs, and keeps heartbeats out of business messages', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/all', { key: 'test-key' })
     t.after(() => client.close())
@@ -259,24 +259,29 @@ test('Lipo replies only to exact authenticated text pings and keeps heartbeat tr
     client.setMessageHandler(message => received.push(message))
     const socket = sockets[0]
     socket.open()
-    socket.receiveText('ping')
+    socket.receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678400000 } })
     assert.deepEqual(socket.sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
     assert.deepEqual(received, [])
     socket.receive({ type: 'auth_ok' })
     socket.receive({ type: 'init', data: {} })
-    for (const text of ['pong', 'PING', ' ping', 'ping\n', '"ping"', 'not JSON']) socket.receiveText(text)
-    socket.receive({ type: 'heartbeat', data: { id: '002', timestamp: 123 } })
+    for (const text of ['ping', 'pong', 'PING', ' ping', 'ping\n', '"ping"', 'not JSON']) socket.receiveText(text)
+    for (const data of [undefined, null, {}, [], { id: null }, { id: 1 }, { id: '' }, { id: false }, { id: ['1'] }]) {
+        socket.receive({ type: 'heartbeat', data })
+    }
     assert.equal(socket.sent.length, 1)
     await advance(60000)
     assert.deepEqual(socket.sent.map(JSON.parse), [
         { type: 'auth', key: 'test-key' }, { type: 'query_all' }, { type: 'query_all' },
     ])
-    socket.receiveText('ping')
-    assert.equal(socket.sent.at(-1), 'pong')
+    socket.receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678400000 } })
+    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'heartbeat', data: { id: '1' } })
     assert.equal(socket.sentAt.at(-1), 60000)
     assert.equal(socket.sent.length, 4)
+    socket.receive({ type: 'heartbeat', data: { id: '9007199254740993', timestamp: 1793678460000 } })
+    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'heartbeat', data: { id: '9007199254740993' } })
+    assert.equal(socket.sent.length, 5)
     socket.receive({ type: 'query_all', data: {} })
-    const report = { type: 'jma_eew', data: { eventId: 'after-ping' }, md5: 'current-digest' }
+    const report = { type: 'jma_eew', data: { eventId: 'after-heartbeat' }, md5: 'current-digest' }
     socket.receive(report)
     assert.deepEqual(received, [
         { type: 'auth_ok' }, { type: 'init', data: {} }, { type: 'query_all', data: {} }, report,
@@ -284,14 +289,14 @@ test('Lipo replies only to exact authenticated text pings and keeps heartbeat tr
     socket.finishClose({ code: 1006, reason: '' })
     await advance(1000)
     sockets[1].open()
-    sockets[1].receiveText('ping')
+    sockets[1].receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678520000 } })
     assert.deepEqual(sockets[1].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
     sockets[1].receive({ type: 'auth_ok' })
     sockets[1].receive({ type: 'init', data: {} })
-    sockets[1].receiveText('ping')
-    assert.equal(sockets[1].sent.at(-1), 'pong')
+    sockets[1].receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678520000 } })
+    assert.deepEqual(JSON.parse(sockets[1].sent.at(-1)), { type: 'heartbeat', data: { id: '1' } })
     client.close()
-    sockets[1].receiveText('ping')
+    sockets[1].receive({ type: 'heartbeat', data: { id: '2', timestamp: 1793678580000 } })
     assert.equal(sockets[1].sent.length, 2)
 })
 
@@ -460,8 +465,8 @@ test('Lipo staggers initial lists and periodic queries, replies to heartbeats im
     socket.receive({ type: 'init', data: snapshot })
     assert.deepEqual(socket.sent.map(JSON.parse).map(message => message.type), ['auth', 'cenc_report_list'])
     await advance(1000)
-    socket.receiveText('ping')
-    assert.equal(socket.sent.at(-1), 'pong')
+    socket.receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678400000 } })
+    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'heartbeat', data: { id: '1' } })
     await advance(999)
     assert.equal(socket.sent.length, 3)
     await advance(1)
@@ -469,8 +474,8 @@ test('Lipo staggers initial lists and periodic queries, replies to heartbeats im
     socket.receive({ type: 'cenc_report_list', data: [] })
     socket.receive({ type: 'cwa_report_list', data: [] })
     await advance(30000)
-    assert.deepEqual(socket.sent.map((message, index) => [message === 'pong' ? message : JSON.parse(message).type, socket.sentAt[index]]), [
-        ['auth', 0], ['cenc_report_list', 0], ['pong', 1000], ['cwa_report_list', 2000],
+    assert.deepEqual(socket.sent.map((message, index) => [JSON.parse(message).type, socket.sentAt[index]]), [
+        ['auth', 0], ['cenc_report_list', 0], ['heartbeat', 1000], ['cwa_report_list', 2000],
         ['cenc_report_list', 30000], ['cwa_report_list', 32000],
     ])
     const sentCount = socket.sent.length
@@ -567,7 +572,8 @@ test('Lipo PEWS forwards station messages without heartbeats, polling or a heart
     sockets[0].receive({ type: 'station_int', data: { frameTime: '2026-11-04 00:00:00', mmi: [-3] } })
     await advance(180000)
     sockets[0].receiveText('ping')
-    sockets[0].receive({ type: 'heartbeat', data: { id: '1' } })
+    sockets[0].receiveText('pong')
+    sockets[0].receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678400000 } })
     client.request('query_all')
     assert.deepEqual(messages.map(message => message.type), ['auth_ok', 'station_list', 'station_int'])
     assert.deepEqual(sockets[0].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
