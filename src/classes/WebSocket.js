@@ -128,21 +128,22 @@ export default WebSocketObj
 class JsonWebSocketClient {
     constructor(urls, autoMessages = [], initMessages = autoMessages, options = {}) {
         this.transport = new WebSocketObj(urls, autoMessages, initMessages, options)
-        this.transport.setMessageHandler(event => {
-            let message
-            try {
-                message = JSON.parse(event.data)
-            } catch {
-                return
-            }
-            if (message && typeof message === 'object') this.handleMessage(message)
-        })
+        this.transport.setMessageHandler(event => this.handleData(event.data))
         this.transport.setCloseHandler(event => this.handleClose(event))
     }
     get shouldConnect() { return this.transport.shouldConnect }
     setMessageHandler(handler) { this.messageHandler = handler }
     setCloseHandler(handler) { this.closeHandler = handler }
     setStateHandler(handler) { this.transport.setStateHandler(handler) }
+    handleData(data) {
+        let message
+        try {
+            message = JSON.parse(data)
+        } catch {
+            return
+        }
+        if (message && typeof message === 'object') this.handleMessage(message)
+    }
     handleMessage(message) { this.messageHandler?.(message) }
     handleClose(event) { this.closeHandler?.(event) }
     close() { this.transport.close() }
@@ -182,6 +183,13 @@ export class LipoApiClient extends JsonWebSocketClient {
         this.pendingRequests = new Map()
         this.pendingListRefreshes = new Set()
     }
+    handleData(data) {
+        if (data === 'ping') {
+            if (this.authenticated && !this.pews) this.transport.send('pong')
+            return
+        }
+        super.handleData(data)
+    }
     handleMessage(message) {
         const { type, data } = message
         if (type === 'auth_ok') {
@@ -197,9 +205,6 @@ export class LipoApiClient extends JsonWebSocketClient {
         } else if (!this.authenticated) {
             return
         } else if (type === 'heartbeat') {
-            if (typeof data?.id === 'string') {
-                this.transport.send(JSON.stringify({ type: 'heartbeat', data: { id: data.id } }))
-            }
             return
         } else if (!this.pews && (type === 'init' || type === 'query_all')) {
             if (!data || typeof data !== 'object' || Array.isArray(data)) return

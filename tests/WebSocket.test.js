@@ -37,7 +37,8 @@ const setup = t => {
         close() {
             if (this.readyState < 2) this.readyState = 2
         }
-        receive(message) { this.onmessage?.({ data: JSON.stringify(message) }) }
+        receiveText(data) { this.onmessage?.({ data }) }
+        receive(message) { this.receiveText(JSON.stringify(message)) }
         finishClose(event) {
             this.readyState = 3
             this.onclose?.(event)
@@ -213,7 +214,7 @@ test('authentication success on one connection does not reset another connection
     assert.notEqual(first.socket, failedSocket)
 })
 
-test('Lipo waits for authentication and init, queries only visible requested lists, and echoes heartbeat IDs', async t => {
+test('Lipo waits for authentication and init, queries only visible requested lists, and answers text pings', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/all', {
         key: 'test-key', reportRequests: ['cenc_report_list', 'cwa_report_list', 'usgs_report_list', 'kma_report_list'],
@@ -233,8 +234,8 @@ test('Lipo waits for authentication and init, queries only visible requested lis
     const snapshot = { cenc_report: { type: 'cenc_report', data: null }, cenc_ir: { type: 'cenc_ir', data: [] } }
     socket.receive({ type: 'init', data: snapshot })
     assert.deepEqual(socket.sent.map(JSON.parse).slice(1), [{ type: 'cenc_report_list' }])
-    socket.receive({ type: 'heartbeat', data: { id: '002', timestamp: 123 } })
-    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'heartbeat', data: { id: '002' } })
+    socket.receiveText('ping')
+    assert.equal(socket.sent.at(-1), 'pong')
     socket.receive({ type: 'cenc_report_list', data: [] })
     const before = socket.sent.length
     await advance(29999)
@@ -248,6 +249,50 @@ test('Lipo waits for authentication and init, queries only visible requested lis
     assert.equal(socket.sentAt.at(-1), 52000)
     socket.receive({ type: 'query_all', data: snapshot })
     assert.equal(received.filter(message => message.type === 'query_all').length, 1)
+})
+
+test('Lipo replies only to exact authenticated text pings and keeps heartbeat traffic out of business messages', async t => {
+    const { sockets, advance } = setup(t)
+    const client = new LipoApiClient('wss://lipo.test/all', { key: 'test-key' })
+    t.after(() => client.close())
+    const received = []
+    client.setMessageHandler(message => received.push(message))
+    const socket = sockets[0]
+    socket.open()
+    socket.receiveText('ping')
+    assert.deepEqual(socket.sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
+    assert.deepEqual(received, [])
+    socket.receive({ type: 'auth_ok' })
+    socket.receive({ type: 'init', data: {} })
+    for (const text of ['pong', 'PING', ' ping', 'ping\n', '"ping"', 'not JSON']) socket.receiveText(text)
+    socket.receive({ type: 'heartbeat', data: { id: '002', timestamp: 123 } })
+    assert.equal(socket.sent.length, 1)
+    await advance(60000)
+    assert.deepEqual(socket.sent.map(JSON.parse), [
+        { type: 'auth', key: 'test-key' }, { type: 'query_all' }, { type: 'query_all' },
+    ])
+    socket.receiveText('ping')
+    assert.equal(socket.sent.at(-1), 'pong')
+    assert.equal(socket.sentAt.at(-1), 60000)
+    assert.equal(socket.sent.length, 4)
+    socket.receive({ type: 'query_all', data: {} })
+    const report = { type: 'jma_eew', data: { eventId: 'after-ping' }, md5: 'current-digest' }
+    socket.receive(report)
+    assert.deepEqual(received, [
+        { type: 'auth_ok' }, { type: 'init', data: {} }, { type: 'query_all', data: {} }, report,
+    ])
+    socket.finishClose({ code: 1006, reason: '' })
+    await advance(1000)
+    sockets[1].open()
+    sockets[1].receiveText('ping')
+    assert.deepEqual(sockets[1].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
+    sockets[1].receive({ type: 'auth_ok' })
+    sockets[1].receive({ type: 'init', data: {} })
+    sockets[1].receiveText('ping')
+    assert.equal(sockets[1].sent.at(-1), 'pong')
+    client.close()
+    sockets[1].receiveText('ping')
+    assert.equal(sockets[1].sent.length, 2)
 })
 
 test('Lipo polls all lists and query_all every 30 seconds with stable stagger offsets', async t => {
@@ -415,8 +460,8 @@ test('Lipo staggers initial lists and periodic queries, replies to heartbeats im
     socket.receive({ type: 'init', data: snapshot })
     assert.deepEqual(socket.sent.map(JSON.parse).map(message => message.type), ['auth', 'cenc_report_list'])
     await advance(1000)
-    socket.receive({ type: 'heartbeat', data: { id: '1' } })
-    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'heartbeat', data: { id: '1' } })
+    socket.receiveText('ping')
+    assert.equal(socket.sent.at(-1), 'pong')
     await advance(999)
     assert.equal(socket.sent.length, 3)
     await advance(1)
@@ -424,8 +469,8 @@ test('Lipo staggers initial lists and periodic queries, replies to heartbeats im
     socket.receive({ type: 'cenc_report_list', data: [] })
     socket.receive({ type: 'cwa_report_list', data: [] })
     await advance(30000)
-    assert.deepEqual(socket.sent.map(JSON.parse).map((message, index) => [message.type, socket.sentAt[index]]), [
-        ['auth', 0], ['cenc_report_list', 0], ['heartbeat', 1000], ['cwa_report_list', 2000],
+    assert.deepEqual(socket.sent.map((message, index) => [message === 'pong' ? message : JSON.parse(message).type, socket.sentAt[index]]), [
+        ['auth', 0], ['cenc_report_list', 0], ['pong', 1000], ['cwa_report_list', 2000],
         ['cenc_report_list', 30000], ['cwa_report_list', 32000],
     ])
     const sentCount = socket.sent.length
@@ -441,7 +486,7 @@ test('Lipo staggers initial lists and periodic queries, replies to heartbeats im
     assert.equal(socket.sent.length, sentCount + 2)
     await advance(1)
     assert.deepEqual(socket.sentAt.slice(-3), [34000, 60000, 62000])
-    assert.deepEqual(socket.sent.map(JSON.parse).slice(-3), [
+    assert.deepEqual(socket.sent.slice(-3).map(JSON.parse), [
         { type: 'query_all' }, { type: 'cenc_report_list' }, { type: 'cwa_report_list' },
     ])
     await advance(1999)
@@ -510,7 +555,7 @@ test('Lipo restarts polling after init without report lists or orphan timers', a
     assert.equal(sockets[1].sent.length, sentCount)
 })
 
-test('Lipo PEWS forwards station messages and replies to heartbeats without polling or ping strings', async t => {
+test('Lipo PEWS forwards station messages without heartbeats, polling or a heartbeat timeout', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
     t.after(() => client.close())
@@ -520,12 +565,14 @@ test('Lipo PEWS forwards station messages and replies to heartbeats without poll
     sockets[0].receive({ type: 'auth_ok' })
     sockets[0].receive({ type: 'station_list', data: { frameTime: '2026-11-03 23:00:00', staLatLng: [{ latitude: 35, longitude: 127 }] } })
     sockets[0].receive({ type: 'station_int', data: { frameTime: '2026-11-04 00:00:00', mmi: [-3] } })
-    await advance(60000)
+    await advance(180000)
+    sockets[0].receiveText('ping')
     sockets[0].receive({ type: 'heartbeat', data: { id: '1' } })
+    client.request('query_all')
     assert.deepEqual(messages.map(message => message.type), ['auth_ok', 'station_list', 'station_int'])
-    assert.deepEqual(sockets[0].sent.map(JSON.parse), [
-        { type: 'auth', key: 'test-key' }, { type: 'heartbeat', data: { id: '1' } },
-    ])
+    assert.deepEqual(sockets[0].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
+    assert.equal(sockets.length, 1)
+    assert.equal(sockets[0].readyState, 1)
 })
 
 test('Lipo stops invalid credentials by default, backs off opt-in auth retries, and resets only after auth succeeds', async t => {
@@ -603,6 +650,9 @@ test('provider clients send initial queries and pings immediately and repeat eve
     assert.deepEqual(sockets[0].sentAt, [0, 30000, 60000].flatMap(at => [0, 2000, 4000, 6000, 8000].map(offset => at + offset)))
     assert.deepEqual(sockets[1].sentAt, [0, 30000, 60000])
     assert.deepEqual(sockets[2].sentAt, [0, 30000, 60000])
+    const sentCounts = sockets.map(socket => socket.sent.length)
+    sockets.forEach(socket => socket.receiveText('ping'))
+    assert.deepEqual(sockets.map(socket => socket.sent.length), sentCounts)
     sockets[0].onmessage({ data: 'not JSON' })
     sockets[0].receive({ type: 'jma_eew', EventID: 'test' })
     assert.deepEqual(received, [{ type: 'jma_eew', EventID: 'test' }])
