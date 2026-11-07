@@ -260,7 +260,8 @@ export class PalertStation {
         this.pga = null
         this.pgv = null
         this.level = -1
-        this.recentData = []
+        // Calculation-only history; UI consumers observe the derived station fields.
+        this.recentData = markRaw([])
         this.recentSeconds = 60
         this.recentMaxLevel = -1
         this.updateStamp = null
@@ -297,9 +298,10 @@ export class PalertStation {
             pgv: null,
             level: -1,
         }))
-        this.recentData.unshift({ ...data }, ...missingData)
-        this.recentData.splice(this.recentSeconds)
-        this.recentMaxLevel = Math.max(...this.recentData.map(data => data.level).filter(Number.isFinite), -1)
+        const recentData = this.recentData
+        recentData.unshift({ ...data }, ...missingData)
+        recentData.splice(this.recentSeconds)
+        this.recentMaxLevel = Math.max(...recentData.map(data => data.level).filter(Number.isFinite), -1)
         this.activity = this.calcActivity()
         this.completedPick = null
         // Advance missing seconds before the current sample, so a gap cannot revive a closed pick.
@@ -324,15 +326,16 @@ export class PalertStation {
         const isValid = Number.isFinite(level) && level >= 0 && Number.isFinite(pga) && pga >= 0
         if(this.triggerStamp === null) {
             if(!isValid) return
+            const recentData = this.recentData
             let backgroundMaxPga = 0
             for(let offset = 1; offset <= 8; offset++) {
-                const before = this.recentData[offset]
+                const before = recentData[offset]
                 if(!before || before.timestamp !== timestamp - offset * 1000 ||
                     !Number.isFinite(before.level) || before.level < 0 ||
                     !Number.isFinite(before.pga) || before.pga < 0) return
                 if(offset >= 2) backgroundMaxPga = Math.max(backgroundMaxPga, before.pga)
             }
-            const previous = this.recentData[1]
+            const previous = recentData[1]
             // Either sample may reach level six; prefer the preceding sample as onset, including a completed pick's final sample.
             if((level >= 6 || previous.level >= 6) && previous.pga > 0 &&
                 compareFloat(pga, backgroundMaxPga * 1.5) >= 0 && compareFloat(previous.pga, backgroundMaxPga * 1.5) >= 0) {
@@ -420,10 +423,11 @@ export class PalertStation {
     }
     updateHoldLevel(render = true){
         const holdSeconds = settingsStore.mainSettings.displaySeisNet.palertLevelHold
-        const latestTimestamp = this.recentData[0]?.timestamp
+        const recentData = this.recentData
+        const latestTimestamp = recentData[0]?.timestamp
         const earliestTimestamp = latestTimestamp - (holdSeconds - 1) * 1000
         const holdLevel = Math.max(
-            ...this.recentData
+            ...recentData
                 .filter(data => data.timestamp >= earliestTimestamp && data.timestamp <= latestTimestamp)
                 .map(data => data.level),
             -1
@@ -720,7 +724,9 @@ export class NiedStation {
         this.updateStamp = 0
         this.triggerStamp = 0
         this.ascend = 0
-        this.recentLevel = []
+        // Calculation-only history; UI consumers observe level/activity/isActive.
+        // Avoid proxying every shifted sample across all NIED stations each second.
+        this.recentLevel = markRaw([])
         this.activity = 0
         this.isActive = false
         this.markerType = null
@@ -762,35 +768,36 @@ export class NiedStation {
         this.activity = this.calcActivity(level, ascend)
     }
     calcAscend() {
-        const arr = [...this.recentLevel];
+        const recentLevel = this.recentLevel;
+        const arr = [...recentLevel];
         if (arr.length === 0) {
             return { ascend: 0, triggerStamp: 0 };
         }
-        const triggerSourceIndexes = this.recentLevel.map((level, index) => level === -1 ? -1 : index);
+        const triggerSourceIndexes = recentLevel.map((level, index) => level === -1 ? -1 : index);
         const expireSeconds = 8;
         const maxShortValleyLength = 2;
         const maxWeakRisePlateauLength = 4;
         // Resolve missing values before measuring short valleys.
         let segmentStartIndex = 0;
         while(segmentStartIndex < arr.length) {
-            if(this.recentLevel[segmentStartIndex] > 0) {
+            if(recentLevel[segmentStartIndex] > 0) {
                 segmentStartIndex++;
                 continue;
             }
             let segmentEndIndex = segmentStartIndex + 1;
-            while(segmentEndIndex < arr.length && this.recentLevel[segmentEndIndex] <= 0) {
+            while(segmentEndIndex < arr.length && recentLevel[segmentEndIndex] <= 0) {
                 segmentEndIndex++;
             }
 
             let missingStartIndex = segmentStartIndex;
             let truncated = false;
             while(missingStartIndex < segmentEndIndex) {
-                if(this.recentLevel[missingStartIndex] !== -1) {
+                if(recentLevel[missingStartIndex] !== -1) {
                     missingStartIndex++;
                     continue;
                 }
                 let missingEndIndex = missingStartIndex + 1;
-                while(missingEndIndex < segmentEndIndex && this.recentLevel[missingEndIndex] === -1) {
+                while(missingEndIndex < segmentEndIndex && recentLevel[missingEndIndex] === -1) {
                     missingEndIndex++;
                 }
                 const missingLength = missingEndIndex - missingStartIndex;
@@ -800,7 +807,7 @@ export class NiedStation {
                     truncated = true;
                     break;
                 }
-                arr.fill(this.recentLevel[missingEndIndex], missingStartIndex, missingEndIndex);
+                arr.fill(recentLevel[missingEndIndex], missingStartIndex, missingEndIndex);
                 missingStartIndex = missingEndIndex;
             }
             if(truncated) break;
@@ -1064,7 +1071,8 @@ export class KmaStation {
         this.latLng = latLng
         this.useCanvasLayer = useCanvasLayer
         this.level = intensity + 2
-        this.recentLevel = []
+        // Calculation-only history; UI consumers observe the derived station fields.
+        this.recentLevel = markRaw([])
         this.recentSeconds = 60
         this.recentMaxLevel = -1
         this.activityLevel = this.level
@@ -1078,15 +1086,16 @@ export class KmaStation {
     }
     update(intensity, render = true){
         this.level = intensity + 2
-        this.recentLevel.unshift(this.level)
-        this.recentLevel.splice(this.recentSeconds)
-        this.recentMaxLevel = Math.max(...this.recentLevel.filter(Number.isFinite), -1)
-        const activityArr = this.recentLevel.slice(0, this.activitySeconds)
-        const pastArr = this.recentLevel.slice(this.activitySeconds)
+        const recentLevel = this.recentLevel
+        recentLevel.unshift(this.level)
+        recentLevel.splice(this.recentSeconds)
+        this.recentMaxLevel = Math.max(...recentLevel.filter(Number.isFinite), -1)
+        const activityArr = recentLevel.slice(0, this.activitySeconds)
+        const pastArr = recentLevel.slice(this.activitySeconds)
         this.activityLevel = Math.max(...activityArr, -1)
         const pastLevel = pastArr.filter(level => level >= 0).length >= this.activitySeconds * 3 ? Math.max(...pastArr, -1) : -1
         this.ascend = pastLevel >= 0 ? activityArr.filter(level => level > pastLevel).length : 0
-        const holdLevel = Math.max(...this.recentLevel.slice(0, settingsStore.mainSettings.displaySeisNet.kmaIntHold), -1)
+        const holdLevel = Math.max(...recentLevel.slice(0, settingsStore.mainSettings.displaySeisNet.kmaIntHold), -1)
         if(holdLevel != this.holdLevel) {
             this.holdLevel = holdLevel
             this.intensity = getMmiFromKmaLevel(this.holdLevel)
