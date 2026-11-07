@@ -294,10 +294,10 @@
                     </div>
                     <div class="ws-status">
                         <div>WebSocket状态: </div>
-                        <div :class="'s' + webSocketStatus.wolfx.readyState">Wolfx{{ webSocketStatus.wolfx.urlIndex ? '(B)' : '' }}</div>
-                        <div :class="lipoStatusClass">Lipo</div>
-                        <div :class="'s' + webSocketStatus.p2pquake.readyState">P2PQ{{ webSocketStatus.p2pquake.urlIndex ? '(B)' : '' }}</div>
-                        <div v-if="accessStore.canUse('gqEew')" :class="'s' + webSocketStatus.gq.readyState">GQ{{ webSocketStatus.gq.urlIndex ? '(B)' : '' }}</div>
+                        <div v-if="statusStore.activeWolfxSources.length > 0" :class="'s' + webSocketStatus.wolfx.readyState">Wolfx{{ webSocketStatus.wolfx.urlIndex ? '(B)' : '' }}</div>
+                        <div v-if="statusStore.activeLipoSources.length > 0" :class="lipoStatusClass">Lipo</div>
+                        <div v-if="statusStore.activeP2pquakeSources.length > 0" :class="'s' + webSocketStatus.p2pquake.readyState">P2PQ{{ webSocketStatus.p2pquake.urlIndex ? '(B)' : '' }}</div>
+                        <div v-if="accessStore.canUse('gqEew') && statusStore.isApiEnabled('gqEew', 'globalquake')" :class="'s' + webSocketStatus.gq.readyState">GQ{{ webSocketStatus.gq.urlIndex ? '(B)' : '' }}</div>
                     </div>
                     <div class="update-time" v-if="settingsStore.mainSettings.displayClock" @dblclick="resetSeisNetDelay">
                         当前时间: {{ currentTimeText }} (UTC{{ formatTimeZone(systemTimeZone) }})
@@ -1961,7 +1961,7 @@ onUnmounted(() => {
                         color: red;
                     }
                     .s4{
-                        display: none;
+                        color: white;
                     }
                 }
                 .update-time{
