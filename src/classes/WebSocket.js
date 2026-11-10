@@ -1,4 +1,4 @@
-const retryIntervals = [1000, 2000, 5000, 10000, 30000]
+const retryIntervals = [1000, 2000, 5000, 10000, 20000]
 
 class WebSocketObj {
     constructor(urls, autoMessages = [], initMessages = [...autoMessages], { resetRetryOnOpen = true, autoSendInterval = 30000 } = {}) {

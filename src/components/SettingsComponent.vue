@@ -1310,18 +1310,22 @@
             @change="handleNeedReload"
             @manage-api-key="openApiKeyManager"
         />
-        <el-dialog v-model="verifyDialog" width="300px" top="20vh" :show-close="false" append-to-body>
-            <el-form :model="idForm">
-                <el-form-item label="用户名" label-width="60px">
-                    <el-input v-model="idForm.username" @keyup.enter="postVerify()" />
-                </el-form-item>
-                <el-form-item label="密码" label-width="60px">
-                    <el-input type="password" v-model="idForm.password" @keyup.enter="postVerify()" />
+        <el-dialog v-model="verifyDialog" title="启用高级功能" width="360px" top="20vh" :show-close="false"
+            :close-on-click-modal="!isVerifying" :close-on-press-escape="!isVerifying"
+            @closed="advancedKey = ''" append-to-body>
+            <el-form @submit.prevent>
+                <el-form-item label="密钥" label-width="60px">
+                    <el-input type="password" v-model="advancedKey" show-password
+                        :disabled="isVerifying || !!pendingAdvancedConfig" @keyup.enter="submitAdvancedFunctions()" />
                 </el-form-item>
             </el-form>
+            <el-alert v-if="pendingAdvancedConfig" title="认证结果已收到，本地保存未完成，请重试保存。"
+                type="warning" :closable="false" show-icon />
             <template #footer>
-                <el-button type="default" @click="verifyDialog = false">取消</el-button>
-                <el-button type="primary" @click="postVerify()">确定</el-button>
+                <el-button type="default" :disabled="isVerifying" @click="verifyDialog = false">取消</el-button>
+                <el-button type="primary" :loading="isVerifying" @click="submitAdvancedFunctions()">
+                    {{ pendingAdvancedConfig ? '重试保存' : '确定' }}
+                </el-button>
             </template>
         </el-dialog>
         <el-dialog class="customize-audio" v-model="customizeAudio" width="60%" :show-close="false" append-to-body>
@@ -1437,8 +1441,9 @@ import { useStatusStore } from '@/stores/status';
 import { chimeUrls, utilUrls } from '@/utils/Urls';
 import { APP_TITLE, APP_VERSION } from '@/utils/AppInfo';
 import Http from '@/classes/Http';
+import axios from 'axios';
 import { tremConfig, setTremConfig, selectTremStationSource } from '@/features/stations/TremConfig';
-import { h, ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { h, ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Key, QuestionFilled, Setting, TopRight } from '@element-plus/icons-vue';
 import { calcPassedTime, formatCsis, openUrl, playSound, setClassName, shindoScale, calcCsisLevel, formatTimeZone, systemTimeZone } from '@/utils/Utils';
 import { join, appDataDir } from "@tauri-apps/api/path";
@@ -1681,19 +1686,13 @@ const openApiKeyManager = () => {
 }
 const advancedInput = ref('')
 const verifyDialog = ref(false)
-let verifyType = ''
-const idForm = reactive({
-    username: '',
-    password: '',
-})
+const advancedKey = ref('')
+const isVerifying = ref(false)
+const pendingAdvancedConfig = ref(null)
+let advancedVerificationDisposed = false
 const handleAdvance = (val)=>{
     switch(val){
-        case 'enableIclEew':
-        case 'enableTremFunctions':
-        case 'enableGqEew':
-        case 'enableNmefcTsunami':
-        case 'verifyAdmin': {
-            verifyType = val
+        case 'enableAdvancedFunctions': {
             verifyDialog.value = true
             break
         }
@@ -1764,99 +1763,162 @@ const handleAdvance = (val)=>{
     }
     advancedInput.value = ''
 }
-const postVerify = async (type = verifyType)=>{
-    switch(type){
-        case 'enableIclEew': {
-            const res = await Http.post('https://api.lipomoea.tech/icl_url', idForm)
-            if(statusStore.isResettingApp) return
-            if(res && res.success){
-                statusStore.setLocalStorageItem('iclUrl', JSON.stringify(res.data))
-                accessStore.grant('iclEew')
-                if(settingsStore.isDataSourceEnabled('iclEew')) handleNeedReload()
-                verifyDialog.value = false
-                ElMessage({
-                    message: '认证成功',
-                    type: 'success'
-                })
-            }
-            else{
-                ElMessage({
-                    message: '认证失败',
-                    type: 'error'
-                })
-            }
-            break
+const isAdvancedObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+const isAdvancedText = value => typeof value === 'string' && value.trim().length > 0
+const isAdvancedUrl = (value, protocol) => {
+    if(!isAdvancedText(value)) return false
+    try {
+        return new URL(value).protocol === protocol
+    } catch {
+        return false
+    }
+}
+const advancedFeatures = [
+    { field: 'enableIclEew', storageKey: 'iclUrl', capability: 'iclEew', validate: isAdvancedObject },
+    {
+        field: 'enableTremFunctions', storageKey: 'tremUrl', capability: 'tremFunctions',
+        validate: config => {
+            const trem = config.seisNetUrls?.trem
+            return isAdvancedObject(trem) && isAdvancedUrl(trem.stationList, 'https:') &&
+                isAdvancedUrl(trem.stationReplay, 'https:') && Array.isArray(trem.stationSources) &&
+                trem.stationSources.length > 0 && trem.stationSources.every(source =>
+                    isAdvancedObject(source) && isAdvancedText(source.id) && isAdvancedText(source.name) &&
+                    isAdvancedUrl(source.url, 'https:')
+                ) && new Set(trem.stationSources.map(source => source.id)).size === trem.stationSources.length
+        },
+    },
+    {
+        field: 'enableGqEew', storageKey: 'gqUrl', capability: 'gqEew',
+        validate: config => Array.isArray(config.gqEew_ws) && config.gqEew_ws.length > 0 &&
+            config.gqEew_ws.every(url => isAdvancedUrl(url, 'wss:')),
+    },
+    {
+        field: 'enableNmefcTsunami', storageKey: 'nmefcTsunami', capability: 'nmefcTsunamiMap',
+        validate: config => isAdvancedUrl(config.cn_tsunami, 'https:'),
+    },
+]
+const validateAdvancedFunctions = data => {
+    if(!isAdvancedObject(data)) throw new Error('Invalid advanced functions data')
+    const entries = []
+    for(const feature of advancedFeatures) {
+        if(!Object.hasOwn(data, feature.field)) continue
+        const config = data[feature.field]
+        if(!isAdvancedObject(config) || !feature.validate(config)) throw new Error('Invalid advanced function config')
+        entries.push({ storageKey: feature.storageKey, capability: feature.capability, config })
+    }
+    return {
+        entries,
+        hasUnknown: Object.keys(data).some(field => !advancedFeatures.some(feature => feature.field === field)),
+    }
+}
+const advancedErrorMessages = {
+    '400:INVALID_REQUEST': '认证请求格式不正确，请检查密钥。',
+    '401:INVALID_KEY': '密钥无效，请检查输入或联系管理员。',
+    '409:KEY_ALREADY_USED': '此密钥已使用，无法再次认证。',
+    '413:INVALID_REQUEST': '认证请求过大，请检查密钥。',
+    '415:INVALID_REQUEST': '认证请求格式不正确，请联系管理员。',
+    '405:METHOD_NOT_ALLOWED': '认证请求方式不正确，请联系管理员。',
+    '503:CONFIGURATION_ERROR': '服务端功能配置异常，请联系管理员。',
+    '503:SERVICE_UNAVAILABLE': '认证服务暂不可用，请稍后重试。',
+}
+const saveAdvancedFunctions = entries => {
+    const previousCapabilities = { ...accessStore.capabilities }
+    const previousAccessSettings = localStorage.getItem('accessSettings')
+    const nextCapabilities = { ...previousCapabilities }
+    let permissionsSaved = false
+    try {
+        // Persist the complete result before publishing reactive changes to the App watcher.
+        for(const entry of entries) {
+            statusStore.setLocalStorageItem(entry.storageKey, JSON.stringify(entry.config))
+            nextCapabilities[entry.capability] = true
         }
-        case 'enableTremFunctions': {
-            const res = await Http.post('https://api.lipomoea.tech/trem_url', idForm)
-            if(statusStore.isResettingApp) return
-            if(res && res.success){
-                statusStore.setLocalStorageItem('tremUrl', JSON.stringify(res.data))
-                setTremConfig(res.data)
-                accessStore.grant('tremFunctions')
-                handleNeedReload()
-                verifyDialog.value = false
-                ElMessage({
-                    message: '认证成功',
-                    type: 'success'
-                })
-            }
-            else{
-                ElMessage({
-                    message: '认证失败',
-                    type: 'error'
-                })
-            }
-            break
+        statusStore.setLocalStorageItem('accessSettings', JSON.stringify(nextCapabilities))
+        permissionsSaved = true
+        for(const entry of entries) {
+            if(!accessStore.grant(entry.capability)) throw new Error('Advanced function grant failed')
         }
-        case 'enableGqEew': {
-            const res = await Http.post('https://api.lipomoea.tech/gq_url', idForm)
-            if(statusStore.isResettingApp) return
-            if(res && res.success){
-                statusStore.setLocalStorageItem('gqUrl', JSON.stringify(res.data))
-                accessStore.grant('gqEew')
-                if(settingsStore.isDataSourceEnabled('gqEew')) handleNeedReload()
-                verifyDialog.value = false
-                ElMessage({
-                    message: '认证成功',
-                    type: 'success'
-                })
-            }
-            else{
-                ElMessage({
-                    message: '认证失败',
-                    type: 'error'
-                })
-            }
-            break
+    } catch(error) {
+        Object.assign(accessStore.capabilities, previousCapabilities)
+        if(permissionsSaved) {
+            // An unexpected grant failure must not leave new permissions in storage.
+            // If storage also fails here, the validated result remains available for retry.
+            try {
+                if(previousAccessSettings === null) localStorage.removeItem('accessSettings')
+                else statusStore.setLocalStorageItem('accessSettings', previousAccessSettings)
+            } catch {}
         }
-        case 'enableNmefcTsunami': {
-            const res = await Http.post('https://api.lipomoea.tech/cn_tsunami_topo_json_url', idForm)
-            if(statusStore.isResettingApp) return
-            if(res && res.success){
-                statusStore.setLocalStorageItem('nmefcTsunami', JSON.stringify(res.data))
-                accessStore.grant('nmefcTsunamiMap')
-                handleNeedReload()
-                verifyDialog.value = false
-                ElMessage({
-                    message: '认证成功',
-                    type: 'success'
+        throw error
+    }
+    const tremEntry = entries.find(entry => entry.capability === 'tremFunctions')
+    if(tremEntry) setTremConfig(tremEntry.config)
+}
+const submitAdvancedFunctions = async () => {
+    if(isVerifying.value || statusStore.isResettingApp || advancedVerificationDisposed) return
+    const key = advancedKey.value.trim()
+    if(!pendingAdvancedConfig.value && (!key || Array.from(key).length > 128)) {
+        ElMessage({ message: '请输入有效密钥，长度不能超过 128 个字符。', type: 'error' })
+        return
+    }
+    isVerifying.value = true
+    try {
+        if(!pendingAdvancedConfig.value) {
+            let response
+            try {
+                response = await axios.post('https://api.lipomoea.cn/kanameishi-advanced', { key }, {
+                    timeout: 30000,
+                    headers: { 'Content-Type': 'application/json' },
+                    withCredentials: false,
+                    validateStatus: () => true,
                 })
+            } catch {
+                if(statusStore.isResettingApp || advancedVerificationDisposed) return
+                ElMessage({ message: '认证失败。请检查网络，或联系管理员。', type: 'error' })
+                return
             }
-            else{
+            if(statusStore.isResettingApp || advancedVerificationDisposed) return
+            const body = response.data
+            if(response.status !== 200 || !isAdvancedObject(body) || body.success !== true) {
+                const message = isAdvancedObject(body) && body.success === false
+                    ? advancedErrorMessages[`${response.status}:${body.code}`] : null
                 ElMessage({
-                    message: '认证失败',
-                    type: 'error'
+                    message: message || '响应错误，请联系管理员。',
+                    type: 'error',
                 })
+                return
             }
-            break
+            let config
+            try {
+                config = validateAdvancedFunctions(body.data)
+            } catch {
+                ElMessage({ message: '功能配置错误，请联系管理员。', type: 'error' })
+                return
+            }
+            if(config.entries.length === 0) {
+                ElMessage({
+                    message: config.hasUnknown ? '未识别的功能，请联系管理员。' : '无可启用的功能，请联系管理员。',
+                    type: 'warning',
+                })
+                return
+            }
+            pendingAdvancedConfig.value = config
         }
-        case 'verifyAdmin': {
-            postVerify('enableIclEew')
-            postVerify('enableTremFunctions')
-            postVerify('enableGqEew')
-            postVerify('enableNmefcTsunami')
+        try {
+            saveAdvancedFunctions(pendingAdvancedConfig.value.entries)
+        } catch {
+            ElMessage({ message: '本地保存失败，请重试保存。', type: 'error' })
+            return
         }
+        const hasUnknown = pendingAdvancedConfig.value.hasUnknown
+        pendingAdvancedConfig.value = null
+        advancedKey.value = ''
+        verifyDialog.value = false
+        ElMessage({
+            message: hasUnknown ? '认证成功；部分功能无法识别，请联系管理员。' : '认证成功',
+            type: hasUnknown ? 'warning' : 'success',
+        })
+        handleNeedReload()
+    } finally {
+        isVerifying.value = false
     }
 }
 const handleNeedReload = () => {
@@ -2129,6 +2191,9 @@ onMounted(async () => {
     statusStore.setLocalStorageItem('SHOW_ABOUT_FLG', SHOW_ABOUT_FLG)
 })
 onBeforeUnmount(() => {
+    advancedVerificationDisposed = true
+    pendingAdvancedConfig.value = null
+    advancedKey.value = ''
     clearInterval(autoCheckInterval)
 })
 </script>

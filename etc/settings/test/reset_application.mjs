@@ -1,7 +1,8 @@
 // node etc/settings/test/reset_application.mjs
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
+import { createAdvancedTest, fullConfig, successResponse } from './fixtures/advanced_functions.mjs'
 
 const source = readFileSync(new URL('../../../src/components/SettingsComponent.vue', import.meta.url), 'utf8')
 const extract = (startMarker, endMarker) => {
@@ -85,18 +86,22 @@ console.log('PASS confirmation clears every key before page reload')
 }
 console.log('PASS storage failure aborts reset and reports the error')
 
-const verifySource = extract('const postVerify =', 'const handleNeedReload =')
-const createVerify = new Function('Http', 'idForm', 'statusStore', 'accessStore', 'settingsStore', 'handleNeedReload', 'verifyDialog', 'ElMessage',
-    `${verifySource}; return postVerify`)
-for(const type of ['enableIclEew', 'enableTremFunctions', 'enableGqEew', 'enableNmefcTsunami']) {
+for(const outcome of ['success', 'failure']) {
     const response = deferred()
-    const unexpected = () => assert.fail('Late authorization response changed application state after reset')
-    const status = { isResettingApp: false, setLocalStorageItem: unexpected }
-    const verify = createVerify({ post: () => response.promise }, {}, status,
-        { grant: unexpected }, { isDataSourceEnabled: unexpected }, unexpected, ref(true), unexpected)
-    const pending = verify(type)
-    status.isResettingApp = true
-    response.resolve({ success: true, data: { url: 'https://example.invalid' } })
+    const test = createAdvancedTest({ post: () => response.promise })
+    const pending = test.submitAdvancedFunctions()
+    test.statusStore.isResettingApp = true
+    test.localStorage.clear()
+    if(outcome === 'success') response.resolve(successResponse(fullConfig))
+    else response.reject(new Error('Network error'))
     await pending
+    await nextTick()
+    assert.equal(test.stored.size, 0, 'Late authorization responses cannot restore cleared local data')
+    assert(Object.values(test.accessStore.capabilities).every(value => value === false))
+    assert.equal(test.pendingAdvancedConfig.value, null)
+    assert.equal(test.tremUpdates, 0)
+    assert.equal(test.reloads, 0)
+    assert.deepEqual(test.messages, [])
+    test.dispose()
 }
 console.log('PASS in-flight authorization responses cannot restore local data after reset')

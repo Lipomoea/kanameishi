@@ -72,11 +72,11 @@ const setup = t => {
     return { sockets, create, advance }
 }
 
-test('retries wait 1, 2, 5, 10, then 30 seconds, keep the cap, resend auth, and rotate configured servers', async t => {
+test('retries wait 1, 2, 5, 10, then 20 seconds, keep the cap, resend auth, and rotate configured servers', async t => {
     const { sockets, create, advance } = setup(t)
     const client = create()
     const expectedUrls = ['primary', 'primary', 'primary', 'primary', 'backup', 'primary', 'backup']
-    for (const [index, delay] of [1000, 2000, 5000, 10000, 30000, 30000, 30000].entries()) {
+    for (const [index, delay] of [1000, 2000, 5000, 10000, 20000, 20000, 20000].entries()) {
         client.socket.open()
         assert.deepEqual(client.socket.sent, ['auth'])
         client.retryAfterFailure()
