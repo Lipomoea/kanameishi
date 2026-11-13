@@ -28,7 +28,7 @@ const kmaPeriodBarClass = inject('kmaPeriodBarClass')
 const handleTempEqlists = inject('handleTempEqlists')
 const smartSetView = inject('smartSetView')
 let periodMaxLevel = -1
-const stationList = reactive([])
+const stationList = ref([])
 const stations = reactive([])
 let stationCanvasLayer = null
 let gridCanvasLayer = null
@@ -37,6 +37,7 @@ let adjStationIds = {}
 let map
 let stopped = false
 let pendingRender = false
+let pendingStationIntensity = null
 const handleVisibilityChange = () => {
     if (document.visibilityState === 'visible' && pendingRender) {
         pendingRender = false
@@ -90,7 +91,7 @@ const update = (intensities) => {
     kmaMaxInt.value = getMmiFromKmaLevel(maxLevel)
     const activeStations = new Set()
     let first = null
-    for(let i = 0; i < stationList.length; i++) {
+    for(let i = 0; i < stationList.value.length; i++) {
         const station = stations[i]
         const nearbyStations = adjStationIds[i].map(id => stations[id])
         let flag = false
@@ -157,6 +158,28 @@ const initGridCanvasLayer = () => {
     if(!map || gridCanvasLayer) return
     gridCanvasLayer = new KmaGridCanvasLayer(grids.value).addTo(map)
 }
+const handleStationIntensity = data => {
+    const { frameTime, mmi } = data || {}
+    if(typeof frameTime !== 'string' || !Array.isArray(mmi)) return
+    if(!map) {
+        pendingStationIntensity = data
+        return
+    }
+    const timeDiff = calcTimeDiff(frameTime, 9, kmaUpdateTime.value, 9)
+    if(timeDiff > 0) {
+        if(stations.length === 0 || mmi.length != stations.length || mmi.some(int => int == -3)) return
+        if(timeDiff > 1000) {
+            const popNum = Math.min(Math.round(timeDiff / 1000) - 1, 60)
+            const noDataArr = Array(popNum).fill(-1)
+            stations.forEach(station => {
+                station.recentLevel.unshift(...noDataArr)
+                station.recentLevel.splice(station.recentSeconds)
+            })
+        }
+        update(mmi)
+        kmaUpdateTime.value = frameTime
+    }
+}
 let kmaSocket = null
 onMounted(()=>{
     const apiKey = settingsStore.mainSettings.apiKeys.lipoApiKey?.trim()
@@ -174,6 +197,7 @@ onMounted(()=>{
         pews: true,
         autoReconnectOnAuthFail,
     })
+    kmaSocket.setCloseHandler(() => { pendingStationIntensity = null })
     kmaSocket.setMessageHandler(data => {
         if(stopped) return
         const type = data?.type
@@ -201,30 +225,14 @@ onMounted(()=>{
             }
             case 'station_list': {
                 const list = data.data?.staLatLng
-                if(list && JSON.stringify(list) != JSON.stringify(stationList)) {
-                    stationList.length = 0
-                    stationList.push(...list)
+                if(Array.isArray(list)) {
+                    pendingStationIntensity = null
+                    stationList.value = list
                 }
                 break
             }
             case 'station_int': {
-                const Data = data.data
-                const { frameTime, mmi } = Data || {}
-                if(typeof frameTime !== 'string' || !Array.isArray(mmi)) return
-                const timeDiff = calcTimeDiff(frameTime, 9, kmaUpdateTime.value, 9)
-                if(timeDiff > 0) {
-                    if(mmi.length != stations.length || mmi.some(int => int == -3)) return
-                    if(timeDiff > 1000) {
-                        const popNum = Math.min(Math.round(timeDiff / 1000) - 1, 60)
-                        const noDataArr = Array(popNum).fill(-1)
-                        stations.forEach(station => {
-                            station.recentLevel.unshift(...noDataArr)
-                            station.recentLevel.splice(station.recentSeconds)
-                        })
-                    }
-                    kmaUpdateTime.value = frameTime
-                    update(mmi)
-                }
+                handleStationIntensity(data.data)
                 break
             }
         }
@@ -238,8 +246,8 @@ watch(()=>statusStore.map, newVal=>{
         initStationCanvasLayer()
         initGridCanvasLayer()
         map.on('zoomend', renderAll)
-        unwatchStationList = watch(stationList, newVal=>{
-            if(newVal.length > 0){
+        unwatchStationList = watch(stationList, (newVal, oldVal)=>{
+            if(newVal.length > 0 && JSON.stringify(newVal) !== JSON.stringify(oldVal)){
                 stations.forEach(station=>{
                     station.terminate()
                 })
@@ -256,10 +264,10 @@ watch(()=>statusStore.map, newVal=>{
                     const { latitude, longitude } = newVal[i]
                     latLngs[i] = [latitude, longitude]
                 }
-                for(let i = 0; i < stationList.length; i++){
+                for(let i = 0; i < stationList.value.length; i++){
                     const distances = []
                     distMatrix[i] = []
-                    for(let j = 0; j < stationList.length; j++){
+                    for(let j = 0; j < stationList.value.length; j++){
                         let distance
                         if(j < i) distance = distMatrix[j][i]
                         else if(j == i) distance = 0
@@ -278,7 +286,12 @@ watch(()=>statusStore.map, newVal=>{
                 initStationCanvasLayer()
                 renderAll()
             }
-        }, { immediate: true })
+            if(pendingStationIntensity) {
+                const intensity = pendingStationIntensity
+                pendingStationIntensity = null
+                handleStationIntensity(intensity)
+            }
+        }, { immediate: true, flush: 'sync' })
         unwatchGrids = watch(grids, (newVal)=>{
             let maxLevel = -1
             gridCanvasLayer?.setGrids(newVal)

@@ -126,7 +126,7 @@ try {
                 } else eew.update(message, 300000);
             }
             const start = performance.now();
-            n.commitFrame({ timestamp: now, frameTime: data.realTimeData.dataTime.slice(0,19), intensity: data.realTimeData.intensity, generation: n.requestGeneration });
+            n.commitFrame({ timestamp: now, frameTime: data.realTimeData.dataTime.slice(0,19), intensity: data.realTimeData.intensity, siteConfigId: data.realTimeData.siteConfigId, generation: n.requestGeneration });
             await nextTick();
             __replaySamples.push({ time: data.realTimeData.dataTime, active: n.stations.filter(s => s.isActive).length, updateMs: performance.now() - start });
             await new Promise(resolve => setTimeout(resolve, 50));

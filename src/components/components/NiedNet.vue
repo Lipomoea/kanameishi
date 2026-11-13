@@ -33,7 +33,7 @@ const infHypoIcon = L.icon({
     iconSize: [40, 40],
     iconAnchor: [20, 20]
 })
-let stationList = []
+const stationList = reactive([])
 const stationData = ref([])
 const stations = reactive([])
 const siteConfigId = ref('')
@@ -128,6 +128,7 @@ let gridCanvasLayer = null
 let stopped = false
 let requestGeneration = 0
 let latestFrameStamp = null
+let pendingStationFrame = null
 let pendingTimelineSwitch = false
 const frameQueue = new StationFrameQueue(
     frame => commitFrame(frame),
@@ -141,11 +142,11 @@ let updateStamp = null
 const isNiedHypoInfEnabled = () => 
     settingsStore.mainSettings.displaySeisNet.niedNet &&
     settingsStore.mainSettings.displaySeisNet.niedHypoInf
-const update = ()=>{
+const update = (frameStamp)=>{
     if(stationList.length == stations.length && stations.length == stationData.value.length){
         const render = document.visibilityState === 'visible'
         if(!render) pendingRender = true
-        updateStamp = timeToStamp(niedUpdateTime.value, 9)
+        updateStamp = frameStamp
         let maxLevel = -1
         for(let i = 0; i < stationList.length; i++){
             stations[i].update(stationData.value[i], updateStamp, render)
@@ -584,26 +585,21 @@ const fetchStationList = async () => {
         if(stopped) return
         if(res && res.siteConfigId && res.items?.length > 0) {
             clearInterval(fetchStationInterval)
-            requestGeneration++
-            frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
-            siteConfigId.value = res.siteConfigId
-            
-            //低精度[[lat, lng], ...]
-            stationList = res.items
+            const list = res.items
 
             //使用NIED的测站数据提高经纬度精度
-            let k = -1, ko
+            let searchIndex = -1
             const maxTry = 10
-            for(let i = 0; i < stationList.length; i++){
-                ko = k
-                const targetLat = exactRound(stationList[i][0], 1)
-                const targetLng = exactRound(stationList[i][1], 1)
+            for(let stationIndex = 0; stationIndex < list.length; stationIndex++){
+                const previousIndex = searchIndex
+                const targetLat = exactRound(list[stationIndex][0], 1)
+                const targetLng = exactRound(list[stationIndex][1], 1)
                 let possibleSite = null
                 let found = false
-                for(let j = 0; j < maxTry; j++) {
-                    k++
-                    if(k >= niedSitePub.length) break
-                    possibleSite = niedSitePub[k]
+                for(let attempt = 0; attempt < maxTry; attempt++) {
+                    searchIndex++
+                    if(searchIndex >= niedSitePub.length) break
+                    possibleSite = niedSitePub[searchIndex]
                     const { latitude, longitude } = possibleSite
                     if(exactRound(latitude, 1) == targetLat && exactRound(longitude, 1) == targetLng) {
                         found = true
@@ -612,85 +608,26 @@ const fetchStationList = async () => {
                 }
                 if(found) {
                     const { latitude, longitude } = possibleSite
-                    stationList[i] = [latitude, longitude]
+                    list[stationIndex] = [latitude, longitude]
                 } else {
-                    k = ko
-                    console.log(`未匹配的测站经纬度: ${stationList[i]}`)
+                    searchIndex = previousIndex
+                    console.log(`未匹配的测站经纬度: ${list[stationIndex]}`)
                 }
             }
 
-            let latLngs = []
-            for(let i = 0; i < stationList.length; i++){
-                latLngs[i] = stationList[i]
+            const listChanged = JSON.stringify(list) !== JSON.stringify(stationList)
+            const initialFrame = pendingStationFrame?.generation === requestGeneration &&
+                pendingStationFrame.siteConfigId == res.siteConfigId &&
+                pendingStationFrame.intensity.length === list.length &&
+                (!siteConfigId.value || (!listChanged && siteConfigId.value == res.siteConfigId))
+                ? pendingStationFrame : null
+            requestGeneration++
+            frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
+            pendingStationFrame = initialFrame ? { ...initialFrame, generation: requestGeneration } : null
+            siteConfigId.value = res.siteConfigId
+            if(listChanged) {
+                stationList.splice(0, stationList.length, ...list)
             }
-            const distanceMatrix = []
-            triggerDiffToleranceMatrix.length = 0
-            for(let i = 0; i < stationList.length; i++){
-                const distances = []
-                distanceMatrix[i] = new Float64Array(stationList.length)
-                for(let j = 0; j < stationList.length; j++){
-                    let distance
-                    if(j < i) {
-                        distance = distanceMatrix[j][i]
-                    }
-                    else if(j == i) {
-                        distance = 0
-                    }
-                    else {
-                        distance = calcDistanceKm(latLngs[i], latLngs[j])
-                    }
-                    distanceMatrix[i][j] = distance
-                    distances.push({ id: j, distance })
-                }
-                const sortedDistances = distances.sort((a, b) => a.distance - b.distance)
-                const nearbyDistances = sortedDistances.filter(obj => obj.distance <= 30)
-                if(nearbyDistances.length <= 1) {
-                    const candidate = sortedDistances.find(obj => obj.distance > 30 && obj.distance <= 40)
-                    if(candidate) nearbyDistances.push(candidate)
-                }
-                nearbyDistances.splice(nearbyLength)
-                adjStationIds[i] = nearbyDistances.map(obj => obj.id)
-                const hypoDirectionCounts = Object.fromEntries(bearingDirections.map(direction => [direction, 0]))
-                const hypoDistances = sortedDistances.filter(obj => {
-                    if(obj.distance > 30) return false
-                    if(obj.id === i) return true
-                    const direction = calcBearingDirection(latLngs[i], latLngs[obj.id])
-                    if(direction) hypoDirectionCounts[direction]++
-                    return true
-                })
-                sortedDistances
-                    .filter(obj => obj.distance > 30 && obj.distance <= 300)
-                    .some(obj => {
-                        if(bearingDirections.every(direction => hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection)) return true
-                        const direction = calcBearingDirection(latLngs[i], latLngs[obj.id])
-                        if(!direction || hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection) return false
-                        hypoDistances.push(obj)
-                        hypoDirectionCounts[direction]++
-                        return bearingDirections.every(direction => hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection)
-                    })
-                adjStations4Hypo[i] = hypoDistances.map(obj => ({
-                    stationId: obj.id,
-                    distance: obj.distance
-                }))
-            }
-            distanceMatrix.forEach(distanceRow => {
-                // Keep distances in km for inference; activation uses a separate tolerance row.
-                triggerDiffToleranceMatrix.push(distanceRow.map(distance =>
-                    distance / triggerCompatibilityConfig.waveSpeedKmPerSecond * 1000 +
-                    triggerCompatibilityConfig.fixedToleranceMilliseconds
-                ))
-            })
-            stationDistanceTable = {
-                indexes: Object.fromEntries(stationList.map((_, index) => [index, index])),
-                rows: distanceMatrix
-            }
-            stationList.forEach((latLng, index)=>{
-                const station = reactive(new NiedStation(map, index, latLng, 'c', useStationCanvasRenderer.value))
-                stations.push(station)
-            })
-            initStationCanvasLayer()
-            renderAll()
-            clearAbnormalList()
         }
     } catch (err) {
         console.log(err);
@@ -699,6 +636,7 @@ const fetchStationList = async () => {
 const clearAbnormalList = () => 
     Object.keys(abnormalNiedStations).forEach(key => delete abnormalNiedStations[key])
 const scheduleTimelineSwitch = () => {
+    pendingStationFrame = null
     requestGeneration++
     frameQueue.reset()
     pendingTimelineSwitch = true
@@ -708,10 +646,19 @@ const scheduleTimelineSwitch = () => {
     clearAbnormalList()
     resetHypocenterWorker()
 }
-const commitFrame = ({ timestamp: frameStamp, frameTime, intensity, generation }) => {
-    if(stopped || generation != requestGeneration) return
+const commitFrame = frame => {
+    const { timestamp: frameStamp, frameTime, intensity, generation, siteConfigId: frameConfigId } = frame
+    if(stopped || generation != requestGeneration) return false
+    if(!Number.isFinite(frameStamp) || typeof frameTime !== 'string' ||
+        typeof intensity !== 'string' || intensity.length === 0 || !frameConfigId) return false
+    if(siteConfigId.value && (frameConfigId != siteConfigId.value || intensity.length !== stationList.length)) return false
     const isFirstFrameAfterTimelineSwitch = pendingTimelineSwitch
-    if(!isFirstFrameAfterTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return
+    if(!isFirstFrameAfterTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return false
+    if(stations.length === 0) {
+        if(!pendingStationFrame || frameStamp >= pendingStationFrame.timestamp) pendingStationFrame = frame
+        return false
+    }
+    if(stationList.length !== stations.length || intensity.length !== stations.length) return false
     stationData.value = intensity.split('')
     const timeDiff = latestFrameStamp === null || isFirstFrameAfterTimelineSwitch
         ? 0 : frameStamp - latestFrameStamp
@@ -734,10 +681,12 @@ const commitFrame = ({ timestamp: frameStamp, frameTime, intensity, generation }
         })
         clearInferredHypocenters()
     }
+    update(frameStamp)
+    pendingStationFrame = null
     pendingTimelineSwitch = false
     latestFrameStamp = frameStamp
     niedUpdateTime.value = frameTime.replace('T', ' ')
-    update()
+    return true
 }
 onMounted(()=>{
     fetchStationInterval = setInterval(fetchStationList, 10000);
@@ -758,7 +707,7 @@ onMounted(()=>{
             if(stopped || generation != requestGeneration || !frameQueue.isPending(ticket)) return
             if(res?.status == 200) {
                 const data = res.data
-                if(data.realTimeData.siteConfigId == siteConfigId.value) {
+                if(!siteConfigId.value || data.realTimeData.siteConfigId == siteConfigId.value) {
                     if(typeof data.realTimeData.dataTime !== 'string' || typeof data.realTimeData.intensity !== 'string') return
                     const frameTime = data.realTimeData.dataTime.slice(0, -6)
                     const frameStamp = timeToStamp(frameTime, 9)
@@ -766,7 +715,8 @@ onMounted(()=>{
                     const isFirstFrameAfterTimelineSwitch = pendingTimelineSwitch
                     if(!isFirstFrameAfterTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return
 
-                    frame = { timestamp: frameStamp, frameTime, intensity: data.realTimeData.intensity, generation }
+                    frame = { timestamp: frameStamp, frameTime, intensity: data.realTimeData.intensity,
+                        siteConfigId: data.realTimeData.siteConfigId, generation }
                 }
                 else if(siteConfigId.value && isRealtime){
                     clearInterval(requestInterval)
@@ -797,13 +747,95 @@ onMounted(()=>{
     }, 500);
     document.addEventListener('visibilitychange', handleVisibilityChange)
 })
-let unwatchGrids, unwatchRender, unwatchDelay
+let unwatchGrids, unwatchStationList, unwatchRender, unwatchDelay
 watch(()=>statusStore.map, newVal=>{
     if(newVal !== null){
         map = newVal
         initStationCanvasLayer()
         initGridCanvasLayer()
         map.on('zoomend', renderAll)
+        unwatchStationList = watch(stationList, newVal=>{
+            if(stopped || newVal.length === 0) return
+            terminateHypocenterWorker()
+            clearInferredHypocenters()
+            stations.forEach(station => station.terminate())
+            stations.length = 0
+            Object.keys(adjStationIds).forEach(key => delete adjStationIds[key])
+            Object.keys(adjStations4Hypo).forEach(key => delete adjStations4Hypo[key])
+            const latLngs = stationList.map(latLng => [...latLng])
+            const distanceMatrix = []
+            triggerDiffToleranceMatrix.length = 0
+            for(let stationIndex = 0; stationIndex < latLngs.length; stationIndex++){
+                const distances = []
+                distanceMatrix[stationIndex] = new Float64Array(latLngs.length)
+                for(let neighborIndex = 0; neighborIndex < latLngs.length; neighborIndex++){
+                    let distance
+                    if(neighborIndex < stationIndex) {
+                        distance = distanceMatrix[neighborIndex][stationIndex]
+                    }
+                    else if(neighborIndex == stationIndex) {
+                        distance = 0
+                    }
+                    else {
+                        distance = calcDistanceKm(latLngs[stationIndex], latLngs[neighborIndex])
+                    }
+                    distanceMatrix[stationIndex][neighborIndex] = distance
+                    distances.push({ id: neighborIndex, distance })
+                }
+                const sortedDistances = distances.sort((first, second) => first.distance - second.distance)
+                const nearbyDistances = sortedDistances.filter(obj => obj.distance <= 30)
+                if(nearbyDistances.length <= 1) {
+                    const candidate = sortedDistances.find(obj => obj.distance > 30 && obj.distance <= 40)
+                    if(candidate) nearbyDistances.push(candidate)
+                }
+                nearbyDistances.splice(nearbyLength)
+                adjStationIds[stationIndex] = nearbyDistances.map(obj => obj.id)
+                const hypoDirectionCounts = Object.fromEntries(bearingDirections.map(direction => [direction, 0]))
+                const hypoDistances = sortedDistances.filter(obj => {
+                    if(obj.distance > 30) return false
+                    if(obj.id === stationIndex) return true
+                    const direction = calcBearingDirection(latLngs[stationIndex], latLngs[obj.id])
+                    if(direction) hypoDirectionCounts[direction]++
+                    return true
+                })
+                sortedDistances
+                    .filter(obj => obj.distance > 30 && obj.distance <= 300)
+                    .some(obj => {
+                        if(bearingDirections.every(direction => hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection)) return true
+                        const direction = calcBearingDirection(latLngs[stationIndex], latLngs[obj.id])
+                        if(!direction || hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection) return false
+                        hypoDistances.push(obj)
+                        hypoDirectionCounts[direction]++
+                        return bearingDirections.every(direction => hypoDirectionCounts[direction] >= minHypocenterNeighborsPerDirection)
+                    })
+                adjStations4Hypo[stationIndex] = hypoDistances.map(obj => ({
+                    stationId: obj.id,
+                    distance: obj.distance
+                }))
+            }
+            distanceMatrix.forEach(distanceRow => {
+                triggerDiffToleranceMatrix.push(distanceRow.map(distance =>
+                    distance / triggerCompatibilityConfig.waveSpeedKmPerSecond * 1000 +
+                    triggerCompatibilityConfig.fixedToleranceMilliseconds
+                ))
+            })
+            stationDistanceTable = {
+                indexes: Object.fromEntries(stationList.map((latLng, index) => [index, index])),
+                rows: distanceMatrix
+            }
+            stationList.forEach((latLng, index)=>{
+                const station = reactive(new NiedStation(map, index, latLng, 'c', useStationCanvasRenderer.value))
+                stations.push(station)
+            })
+            initStationCanvasLayer()
+            renderAll()
+            clearAbnormalList()
+            if(pendingStationFrame) {
+                const frame = pendingStationFrame
+                pendingStationFrame = null
+                commitFrame(frame)
+            }
+        }, { immediate: true })
         unwatchGrids = watch(grids, (newVal)=>{
             let maxLevel = -1
             gridCanvasLayer?.setGrids(newVal)
@@ -903,11 +935,13 @@ unwatchDelay = watch(()=>statusStore.seisNetReplayDelay, (newVal, oldVal)=>{
     }
 }, { immediate: true })
 watch(() => settingsStore.mainSettings.displaySeisNet.httpDataPriority, () => {
+    pendingStationFrame = null
     requestGeneration++
     frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
 }, { flush: 'sync' })
 onBeforeUnmount(()=>{
     stopped = true
+    pendingStationFrame = null
     requestGeneration++
     frameQueue.reset()
     clearInterval(fetchStationInterval)
@@ -917,6 +951,7 @@ onBeforeUnmount(()=>{
     if(!reloadStarted) clearTimeout(enableReloadTimer)
     document.removeEventListener('visibilitychange', handleVisibilityChange)
     if(unwatchGrids) unwatchGrids()
+    if(unwatchStationList) unwatchStationList()
     if(unwatchRender) unwatchRender()
     if(unwatchDelay) unwatchDelay()
     if(map) {

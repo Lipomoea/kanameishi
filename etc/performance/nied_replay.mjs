@@ -138,9 +138,11 @@ export function createDetector(roster, sensitivity) {
     const updateInferredHypocentersInWorker = (picks, active, inactive, frameStamp) => {
         captured = { frameStamp, triggerStations: createHypocenterTriggerSnapshots(stations), pickCandidates: picks.map(stationToInferredHypocenterPickSnapshot), activeStations: active.map(stationToInferredHypocenterSnapshot), inactiveStations: [...inactive].map(stationToInferredHypocenterSnapshot) };
     };
-    ${section(component, 'const update = ()=>', 'const getHypocenterWorker')}
+    ${section(component, 'const update =', 'const getHypocenterWorker')}
     ${section(component, 'const chainActivate =', 'const renderAll =')}
-    ${section(component, '//使用NIED的测站数据提高经纬度精度', '            initStationCanvasLayer()')}
+    const list = stationList;
+    ${section(component, '//使用NIED的测站数据提高经纬度精度', '            const listChanged =')}
+    ${section(component, '            const latLngs = stationList', '            initStationCanvasLayer()')}
     const stop = watch(grids, value => { statusStore.isActive.niedNet = value.length > 0 });
     return {
         stations, adjacency: adjStations4Hypo, distanceTable: stationDistanceTable, stop,
@@ -148,7 +150,7 @@ export function createDetector(roster, sensitivity) {
             captured = null;
             stationData.value = frame.intensity.split('');
             niedUpdateTime.value = frame.dataTime.slice(0, 19).replace('T', ' ');
-            update();
+            update(timeToStamp(niedUpdateTime.value, 9));
             return captured;
         }
     };

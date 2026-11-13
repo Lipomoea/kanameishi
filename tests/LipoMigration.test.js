@@ -6,6 +6,8 @@ import { markRaw } from 'vue'
 import * as dataSources from '../src/utils/DataSources.js'
 import * as settingsRestore from '../src/utils/SettingsRestore.js'
 import * as usgsData from '../src/utils/UsgsData.js'
+import { decodeKmaPewsMessage } from '../src/utils/KmaPews.js'
+import { createPewsFrame } from './fixtures/KmaPews.js'
 
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8')
 const evaluateStore = (path, name, dependencies, result = `${name}()`) => {
@@ -716,38 +718,50 @@ test('history map display tolerates missing magnitude/depth and rejects missing 
     assert.equal(formatHistoryValue(-1.5, 1, 'km'), '-1.5km')
 })
 
-test('KMA consumes the new station envelopes and still rejects an entire frame containing -3', () => {
+test('KMA consumes decoded binary station envelopes and preserves JSON frame acceptance and gap filling', () => {
     const component = read('src/components/components/KmaNet.vue')
+    const intensityStart = component.indexOf('const handleStationIntensity =')
+    const intensityEnd = component.indexOf('let kmaSocket =', intensityStart)
     const start = component.indexOf('kmaSocket.setMessageHandler(')
     const end = component.indexOf("    document.addEventListener('visibilitychange'", start)
     assert.ok(start >= 0 && end > start)
     let receive
-    const stationList = []
+    const stationList = { value: [] }
     const stations = Array.from({ length: 2 }, () => ({ recentLevel: [], recentSeconds: 60 }))
     const kmaUpdateTime = { value: '2026-11-04 10:00:00' }
     const updates = []
     const dependencies = {
         kmaSocket: { setMessageHandler: handler => { receive = handler } },
-        stopped: false, stationList, stations, kmaUpdateTime,
+        stopped: false, stationList, stations, kmaUpdateTime, map: {}, pendingStationIntensity: null,
         calcTimeDiff: (a, az, b, bz) => timeToStamp(a, az) - timeToStamp(b, bz),
         update: mmi => updates.push(mmi),
     }
-    new Function(...Object.keys(dependencies), component.slice(start, end))(...Object.values(dependencies))
+    const source = component.slice(intensityStart, intensityEnd) + component.slice(start, end)
+    new Function(...Object.keys(dependencies), source)(...Object.values(dependencies))
     const coordinates = [{ latitude: 36.41, longitude: 128.94 }, { latitude: 36.57, longitude: 128.7 }]
-    receive({ type: 'station_list', data: { frameTime: '2026-11-04 09:00:00', staLatLng: coordinates } })
-    assert.deepEqual(stationList, coordinates)
-    receive({ type: 'station_list', data: { frameTime: '2026-11-04 10:00:00', staLatLng: [...coordinates].reverse() } })
-    assert.deepEqual(stationList, [...coordinates].reverse())
-    const frame = (frameTime, mmi) => receive({ type: 'station_int', data: { frameTime, mmi } })
-    frame('2026-11-04 10:00:01', [0, 2])
-    frame('2026-11-04 10:00:02', [8, -3])
-    frame('2026-11-04 10:00:02', [8])
-    frame('2026-11-04 10:00:00', [9, 9])
+    const baselineSecond = timeToStamp('2026-11-04 10:00:00', 9) / 1000
+    receive(decodeKmaPewsMessage(createPewsFrame(1, [641 * 1024 + 894, 657 * 1024 + 870], baselineSecond - 3600)))
+    assert.deepEqual(stationList.value, coordinates)
+    receive(decodeKmaPewsMessage(createPewsFrame(1, [657 * 1024 + 870, 641 * 1024 + 894], baselineSecond)))
+    assert.deepEqual(stationList.value, [...coordinates].reverse())
+    const frame = (second, codes) => receive(decodeKmaPewsMessage(createPewsFrame(2, codes, baselineSecond + second)))
+    frame(1, [13, 2])
+    frame(2, [8, 0])
+    frame(2, [8])
+    frame(0, [9, 9])
     assert.deepEqual(updates, [[0, 2]])
     assert.equal(kmaUpdateTime.value, '2026-11-04 10:00:01')
-    frame('2026-11-04 10:00:04', [-2, 1])
-    assert.deepEqual(updates, [[0, 2], [-2, 1]])
+    frame(2, [8, 9])
+    assert.equal(kmaUpdateTime.value, '2026-11-04 10:00:02')
+    frame(2, [10, 11])
+    frame(1, [10, 11])
+    frame(5, [1, 14])
+    assert.deepEqual(updates, [[0, 2], [8, 9], [-2, 1]])
+    assert.equal(kmaUpdateTime.value, '2026-11-04 10:00:05')
     assert.deepEqual(stations[0].recentLevel, [-1, -1])
+    frame(100, [2, 3])
+    assert.equal(stations[0].recentLevel.length, 60)
+    assert.ok(stations[0].recentLevel.every(level => level === -1))
 })
 
 test('tsunami ordering uses issueTime and tolerates a missing issueTime', () => {

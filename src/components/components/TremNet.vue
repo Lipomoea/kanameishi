@@ -26,7 +26,7 @@ const timeStore = useTimeStore()
 const useStationCanvasRenderer = computed(() => !settingsStore.advancedSettings.fallbackSvgStationRender)
 
 const stationList = reactive({})
-let stationData
+let stationFrame
 const stations = reactive({})
 const taiwanSeisNetLayers = inject('taiwanSeisNetLayers')
 const unregisterSource = taiwanSeisNetLayers.registerSource('trem', stations, station => station.level)
@@ -73,11 +73,12 @@ const activeLevels = computed(() => Object.values(stations)
     .map(station => station.level))
 let pendingRender = false
 const update = ()=>{
+    if(!stationFrame || stationFrame.generation !== requestGeneration || Object.keys(stations).length === 0) return false
     const render = document.visibilityState === 'visible'
     if(!render) pendingRender = true
     let maxInst = -3.1
     Object.keys(stations).forEach(id=>{
-        const data = stationData[id]
+        const data = stationFrame.data[id]
         if(Number.isFinite(data?.i)){
             const alert = !!data.alert
             const intensity = data.i
@@ -88,6 +89,10 @@ const update = ()=>{
     })
     if(render && useStationCanvasRenderer.value) renderAll()
     tremMaxShindo.value = getShindoFromInstShindo(maxInst)
+    pendingTimelineSwitch = false
+    latestFrameStamp = stationFrame.timestamp
+    tremUpdateTime.value = stampToTime(stationFrame.timestamp, 8)
+    return true
 }
 const renderAll = ()=>{
     if(useStationCanvasRenderer.value) {
@@ -136,13 +141,11 @@ const fetchStationList = async () => {
     }
 }
 const commitFrame = ({ timestamp: frameStamp, data, generation }) => {
-    if(stopped || generation != requestGeneration) return
-    if(!pendingTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return
-    pendingTimelineSwitch = false
-    latestFrameStamp = frameStamp
-    stationData = data
-    tremUpdateTime.value = stampToTime(frameStamp, 8)
-    update()
+    if(stopped || generation != requestGeneration) return false
+    if(!pendingTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return false
+    if(stationFrame?.generation === generation && frameStamp < stationFrame.timestamp) return false
+    stationFrame = { timestamp: frameStamp, data, generation }
+    return update()
 }
 const fetchReplayFrame = async () => {
     if(stopped || delay.value <= 0 || !tremConfig.value.stationReplay) return
@@ -217,8 +220,7 @@ watch(()=>statusStore.map, newVal=>{
                     stations[id] = station
                 })
                 // Metadata refreshes keep the active connection and its generation.
-                if(stationData && !pendingTimelineSwitch) update()
-                else renderAll()
+                if(!update()) renderAll()
             }
         }, { immediate: true })
         unwatchActivity = watch(activeLevels, (newVal)=>{

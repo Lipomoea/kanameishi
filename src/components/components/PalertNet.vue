@@ -55,6 +55,7 @@ let map
 let stopped = false
 let requestGeneration = 0
 let latestFrameStamp = null
+let pendingStationFrame = null
 let pendingTimelineSwitch = false
 const frameQueue = new StationFrameQueue(
     frame => commitFrame(frame.timestamp, frame.pgaData, frame.pgvData, frame.generation),
@@ -185,13 +186,18 @@ const updateMaxShindo = () => {
     palertMaxShindo.value = getShindoFromLevel(maxLevel)
 }
 const commitFrame = (frameStamp, pgaData, pgvData, generation) => {
-    if(stopped || generation != requestGeneration) return
+    if(stopped || generation != requestGeneration) return false
     const isFirstFrameAfterTimelineSwitch = pendingTimelineSwitch
-    if(!isFirstFrameAfterTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return
+    if(!isFirstFrameAfterTimelineSwitch && latestFrameStamp !== null && frameStamp <= latestFrameStamp) return false
+    if(Object.keys(stations).length === 0) {
+        if(!pendingStationFrame || frameStamp >= pendingStationFrame.timestamp) {
+            pendingStationFrame = { timestamp: frameStamp, pgaData, pgvData, generation }
+        }
+        return false
+    }
 
     const render = document.visibilityState === 'visible'
     if(!render) pendingRender = true
-    pendingTimelineSwitch = false
     const missingSeconds = latestFrameStamp === null || isFirstFrameAfterTimelineSwitch
         ? 0
         : Math.min(Math.max(Math.round((frameStamp - latestFrameStamp) / 1000) - 1, 0), 60)
@@ -209,6 +215,8 @@ const commitFrame = (frameStamp, pgaData, pgvData, generation) => {
         stations[id].update({ timestamp: frameStamp, pga, pgv, level }, missingSeconds, render)
     })
 
+    pendingStationFrame = null
+    pendingTimelineSwitch = false
     latestFrameStamp = frameStamp
     palertUpdateTime.value = stampToTime(frameStamp, 8)
     updateMaxShindo()
@@ -219,6 +227,7 @@ const commitFrame = (frameStamp, pgaData, pgvData, generation) => {
         station.setActive()
     })
     updateHypocenters()
+    return true
 }
 const updateHypocenters = () => {
     if(!isHypocenterEnabled.value || pendingTimelineSwitch) return
@@ -531,6 +540,7 @@ const buildAdjStations = () => {
     return { detectionAdjStations, hypocenterAdjStations, triggerDiffTolerances, stationDistanceTable: distanceTable }
 }
 const clearTimelineState = (render = true) => {
+    pendingStationFrame = null
     frameQueue.reset()
     terminateHypocenterWorker()
     clearInferredHypocenters()
@@ -544,6 +554,7 @@ const clearTimelineState = (render = true) => {
     if(render && useStationCanvasRenderer.value) renderAll()
 }
 const scheduleTimelineSwitch = () => {
+    pendingStationFrame = null
     resetHypocenterWorker()
     clearInferredHypocenters()
     requestGeneration++
@@ -563,6 +574,11 @@ const fetchStationList = async () => {
         const validStations = response.staInfos.filter(isValidStationInfo)
         if(validStations.length === 0) return
         if(response.version == stationVersion && JSON.stringify(validStations) == JSON.stringify(stationList)) return
+        if(stationList.length > 0) {
+            pendingStationFrame = null
+            requestGeneration++
+            frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
+        }
         stationVersion = response.version
         stationList.splice(0, stationList.length, ...validStations)
     }
@@ -597,6 +613,8 @@ unwatchMap = watch(() => statusStore.map, newVal => {
     map.on('zoomend', renderAll)
     unwatchStationList = watch(stationList, newVal => {
         if(newVal.length === 0) return
+        const initialFrame = Object.keys(stations).length === 0 &&
+            pendingStationFrame?.generation === requestGeneration ? pendingStationFrame : null
         requestGeneration++
         pendingTimelineSwitch = false
         clearTimelineState(false)
@@ -617,6 +635,9 @@ unwatchMap = watch(() => statusStore.map, newVal => {
         triggerDiffToleranceMatrix = adjacency.triggerDiffTolerances
         stationDistanceTable = adjacency.stationDistanceTable
         renderAll()
+        if(initialFrame) {
+            commitFrame(initialFrame.timestamp, initialFrame.pgaData, initialFrame.pgvData, requestGeneration)
+        }
     }, { immediate: true })
     unwatchActivity = watch(activeLevels, newVal => {
         let maxLevel = -1
@@ -645,6 +666,7 @@ unwatchMap = watch(() => statusStore.map, newVal => {
 }, { immediate: true })
 unwatchDelay = watch(delay, scheduleTimelineSwitch)
 watch(() => settingsStore.mainSettings.displaySeisNet.httpDataPriority, () => {
+    pendingStationFrame = null
     requestGeneration++
     frameQueue.reset(pendingTimelineSwitch ? null : latestFrameStamp)
 }, { flush: 'sync' })
@@ -697,6 +719,7 @@ watch(currentMaxShindo, (newVal, oldVal) => {
 
 onBeforeUnmount(() => {
     stopped = true
+    pendingStationFrame = null
     terminateHypocenterWorker()
     destroyInferredHypocenterLayers()
     requestGeneration++

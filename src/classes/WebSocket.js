@@ -1,7 +1,9 @@
+import { decodeKmaPewsMessage } from '../utils/KmaPews.js'
+
 const retryIntervals = [1000, 2000, 5000, 10000, 20000]
 
 class WebSocketObj {
-    constructor(urls, autoMessages = [], initMessages = [...autoMessages], { resetRetryOnOpen = true, autoSendInterval = 30000 } = {}) {
+    constructor(urls, autoMessages = [], initMessages = [...autoMessages], { resetRetryOnOpen = true, autoSendInterval = 30000, binaryType } = {}) {
         if (typeof (urls) == 'string') urls = [urls]
         this.urls = urls
         this.urlIndex = 0
@@ -11,8 +13,10 @@ class WebSocketObj {
         this.resetRetryOnOpen = resetRetryOnOpen
         this.shouldConnect = true
         this.autoSendInterval = autoSendInterval
+        this.binaryType = binaryType
         this.retryIndex = 0
         this.socket = new WebSocket(this.url)
+        if (this.binaryType) this.socket.binaryType = this.binaryType
         this.setupWebSocket()
     }
     async sendMessages(messages, sendMessage = msg => this.send(msg)) {
@@ -96,6 +100,7 @@ class WebSocketObj {
             this.socket.close()
         }
         this.socket = new WebSocket(this.url)
+        if (this.binaryType) this.socket.binaryType = this.binaryType
         this.notifyState()
         this.setupWebSocket()
     }
@@ -173,21 +178,59 @@ const lipoProtocolErrors = new Set([
 
 export class LipoApiClient extends JsonWebSocketClient {
     constructor(urls, { key, reportRequests = [], autoReconnectOnAuthFail = false, pews = false } = {}) {
-        super(urls, [], [JSON.stringify({ type: 'auth', key })], { resetRetryOnOpen: false })
+        super(urls, [], [JSON.stringify({ type: 'auth', key })], {
+            resetRetryOnOpen: false,
+            binaryType: pews ? 'arraybuffer' : undefined,
+        })
         this.authenticated = false
         this.ready = false
         this.pews = pews
+        this.resetPewsState()
         this.autoReconnectOnAuthFail = autoReconnectOnAuthFail
         this.reportRequests = [...new Set(reportRequests)].filter(type => lipoReportRequests.has(type))
         this.availableSources = new Set()
         this.pendingRequests = new Map()
         this.pendingListRefreshes = new Set()
     }
+    resetPewsState() {
+        this.pewsStationCount = 0
+    }
+    handleData(data) {
+        if (!this.pews) return super.handleData(data)
+        if (!this.shouldConnect || this.transport.socket.readyState !== 1) return
+        if (this.pewsSocket !== this.transport.socket) {
+            this.pewsSocket = this.transport.socket
+            this.authenticated = false
+            this.resetPewsState()
+        }
+        let message
+        if (typeof data === 'string') {
+            try {
+                message = JSON.parse(data)
+            } catch {
+                return
+            }
+            if (message?.type !== 'error' && message?.type !== 'auth_ok') return
+        } else {
+            if (!this.authenticated) return
+            try {
+                message = decodeKmaPewsMessage(data)
+            } catch {
+                this.retryPewsProtocol()
+                return
+            }
+        }
+        this.handleMessage(message)
+    }
+    retryPewsProtocol() {
+        this.transport.retryAfterFailure({ code: 0, reason: 'invalid PEWS message' })
+    }
     handleMessage(message) {
         const { type, data } = message
         if (type === 'auth_ok') {
             this.authenticated = true
             this.lastError = null
+            this.resetPewsState()
             this.transport.resetRetryInterval()
         } else if (type === 'error') {
             this.lastError = data
@@ -197,6 +240,17 @@ export class LipoApiClient extends JsonWebSocketClient {
             return
         } else if (!this.authenticated) {
             return
+        } else if (this.pews && type === 'station_list') {
+            if (!Array.isArray(data?.staLatLng) || data.staLatLng.length === 0) {
+                this.retryPewsProtocol()
+                return
+            }
+            this.pewsStationCount = data.staLatLng.length
+        } else if (this.pews && type === 'station_int') {
+            if (!this.pewsStationCount || !Array.isArray(data?.mmi) || data.mmi.length !== this.pewsStationCount) {
+                this.retryPewsProtocol()
+                return
+            }
         } else if (type === 'heartbeat') {
             if (!this.pews && typeof data?.id === 'string' && data.id.length > 0) {
                 this.transport.send(JSON.stringify({ type: 'heartbeat', data: { id: data.id } }))
@@ -251,6 +305,7 @@ export class LipoApiClient extends JsonWebSocketClient {
     handleClose(event) {
         this.authenticated = false
         this.ready = false
+        this.resetPewsState()
         clearInterval(this.queryTimer)
         this.pendingRequests.clear()
         this.pendingListRefreshes.clear()

@@ -57,8 +57,11 @@ export class StationFrameQueue {
             this.remove(entry)
             const frame = entry.frame
             if(frame && (this.lastStamp === null || frame.timestamp > this.lastStamp)) {
-                this.lastStamp = frame.timestamp
-                this.commit(frame)
+                const generation = this.generation
+                if(this.commit(frame) !== false && this.generation === generation &&
+                    (this.lastStamp === null || frame.timestamp > this.lastStamp)) {
+                    this.lastStamp = frame.timestamp
+                }
             }
         }
     }

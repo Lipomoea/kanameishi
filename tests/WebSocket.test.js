@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import WebSocketObj, { LipoApiClient, WolfxClient, P2pQuakeClient, GlobalQuakeClient } from '../src/classes/WebSocket.js'
+import { createPewsFrame } from './fixtures/KmaPews.js'
 
 const setup = t => {
     let now = 0, nextTimerId = 0
@@ -38,6 +39,7 @@ const setup = t => {
             if (this.readyState < 2) this.readyState = 2
         }
         receiveText(data) { this.onmessage?.({ data }) }
+        receiveBinary(data) { this.onmessage?.({ data }) }
         receive(message) { this.receiveText(JSON.stringify(message)) }
         finishClose(event) {
             this.readyState = 3
@@ -560,25 +562,332 @@ test('Lipo restarts polling after init without report lists or orphan timers', a
     assert.equal(sockets[1].sent.length, sentCount)
 })
 
-test('Lipo PEWS forwards station messages without heartbeats, polling or a heartbeat timeout', async t => {
+test('Lipo PEWS authenticates with text and forwards binary stations without polling or a heartbeat timeout', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
     t.after(() => client.close())
     const messages = []
     client.setMessageHandler(message => messages.push(message))
+    assert.equal(sockets[0].binaryType, 'arraybuffer')
     sockets[0].open()
     sockets[0].receive({ type: 'auth_ok' })
-    sockets[0].receive({ type: 'station_list', data: { frameTime: '2026-11-03 23:00:00', staLatLng: [{ latitude: 35, longitude: 127 }] } })
-    sockets[0].receive({ type: 'station_int', data: { frameTime: '2026-11-04 00:00:00', mmi: [-3] } })
+    sockets[0].receiveBinary(createPewsFrame(1, [500 * 1024 + 700], 0))
+    sockets[0].receiveBinary(createPewsFrame(2, [0], 3600))
     await advance(180000)
     sockets[0].receiveText('ping')
     sockets[0].receiveText('pong')
     sockets[0].receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678400000 } })
     client.request('query_all')
     assert.deepEqual(messages.map(message => message.type), ['auth_ok', 'station_list', 'station_int'])
+    assert.deepEqual(messages[1].data.staLatLng, [{ latitude: 35, longitude: 127 }])
+    assert.deepEqual(messages[2].data.mmi, [-3])
     assert.deepEqual(sockets[0].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
     assert.equal(sockets.length, 1)
     assert.equal(sockets[0].readyState, 1)
+})
+
+test('Lipo PEWS forwards all valid intensity times for component acceptance and replaces same-size lists', context => {
+    const { sockets } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    context.after(() => client.close())
+    const messages = []
+    client.setMessageHandler(message => messages.push(message))
+    const socket = sockets[0]
+    socket.open()
+    socket.receive({ type: 'auth_ok' })
+    socket.receiveBinary(createPewsFrame(1, [0, 1], 100))
+    socket.receiveBinary(createPewsFrame(2, [13, 14], 101))
+    socket.receiveBinary(createPewsFrame(2, [13, 14], 102))
+    socket.receiveBinary(createPewsFrame(2, [8, 9], 102))
+    socket.receiveBinary(createPewsFrame(2, [8, 9], 100))
+    socket.receiveBinary(createPewsFrame(1, [1, 0], 99))
+    socket.receiveBinary(createPewsFrame(2, [14, 13], 103))
+    assert.deepEqual(messages.map(message => message.type), [
+        'auth_ok', 'station_list', 'station_int', 'station_int', 'station_int', 'station_int', 'station_list', 'station_int',
+    ])
+    assert.deepEqual(messages.filter(message => message.type === 'station_int').map(message => message.data.timestampMs), [101000, 102000, 102000, 100000, 103000])
+    assert.deepEqual(messages[6].data.staLatLng, [...messages[1].data.staLatLng].reverse())
+})
+
+test('Lipo PEWS reconnects with ArrayBuffer delivery and accepts a fresh snapshot with an older data time', async context => {
+    const { sockets, advance } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    context.after(() => client.close())
+    const messages = []
+    client.setMessageHandler(message => messages.push(message))
+    sockets[0].open()
+    sockets[0].receive({ type: 'auth_ok' })
+    sockets[0].receiveBinary(createPewsFrame(1, [0], 100))
+    sockets[0].receiveBinary(createPewsFrame(2, [1], 100))
+    sockets[0].finishClose({ code: 1006, reason: '' })
+    assert.equal(client.authenticated, false)
+    assert.equal(client.pewsStationCount, 0)
+    await advance(1000)
+    assert.equal(sockets[1].binaryType, 'arraybuffer')
+    sockets[1].open()
+    assert.deepEqual(sockets[1].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
+    sockets[1].receive({ type: 'auth_ok' })
+    const messageCount = messages.length
+    sockets[1].receiveBinary(createPewsFrame(2, [1], 90))
+    assert.equal(messages.length, messageCount)
+    assert.equal(client.pewsStationCount, 0)
+    assert.equal(client.authenticated, false)
+    await advance(1000)
+    assert.equal(sockets[2].binaryType, 'arraybuffer')
+    sockets[2].open()
+    sockets[2].receive({ type: 'auth_ok' })
+    sockets[2].receiveBinary(createPewsFrame(1, [1, 0], 80))
+    sockets[2].receiveBinary(createPewsFrame(2, [12, 13], 90))
+    assert.equal(messages.at(-1).data.timestampMs, 90000)
+    assert.deepEqual(messages.at(-1).data.mmi, [-1, 0])
+    await advance(60000)
+    assert.equal(sockets.length, 3)
+    assert.equal(sockets[2].readyState, 1)
+})
+
+test('Lipo PEWS ignores pre-authentication data and continues after authentication on the same connection', async context => {
+    const { sockets, advance } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    context.after(() => client.close())
+    const messages = []
+    client.setMessageHandler(message => messages.push(message))
+    const socket = sockets[0]
+    socket.open()
+    socket.receiveBinary(createPewsFrame(1, [0, 1], 100))
+    socket.receiveBinary(createPewsFrame(2, [8, 9], 100))
+    socket.receiveText('ping')
+    socket.receiveText('{')
+    socket.receive({ type: 'unknown' })
+    assert.equal(client.authenticated, false)
+    assert.equal(client.pewsStationCount, 0)
+    assert.deepEqual(messages, [])
+    await advance(2000)
+    assert.equal(sockets.length, 1)
+    assert.equal(socket.readyState, 1)
+    socket.receive({ type: 'auth_ok' })
+    socket.receiveBinary(createPewsFrame(1, [0, 1], 100))
+    socket.receiveBinary(createPewsFrame(2, [8, 9], 100))
+    assert.deepEqual(messages.map(message => message.type), ['auth_ok', 'station_list', 'station_int'])
+    assert.deepEqual(messages.at(-1).data.mmi, [8, 9])
+})
+
+const ignoredPewsMessages = {
+    'unknown JSON message types': socket => socket.receive({ type: 'future_message', data: {} }),
+    'legacy JSON business messages': socket => {
+        socket.receive({ type: 'station_list', data: { staLatLng: [{ latitude: 35, longitude: 127 }] } })
+        socket.receive({ type: 'station_int', data: { frameTime: '2026-11-04 00:00:00', mmi: [9] } })
+    },
+    'invalid JSON and non-message JSON values': socket => {
+        for (const data of ['{', 'null', '1', '"auth_ok"', '[]', '{}']) socket.receiveText(data)
+    },
+    'text pings and JSON heartbeats': socket => {
+        socket.receiveText('ping')
+        socket.receiveText('pong')
+        socket.receive({ type: 'heartbeat', data: { id: '1' } })
+    },
+}
+const invalidPewsMessages = {
+    'mismatched station counts': socket => socket.receiveBinary(createPewsFrame(2, [8], 200)),
+    'an undefined intensity code': socket => socket.receiveBinary(createPewsFrame(2, [8, 15], 200)),
+    'malformed binary payloads': socket => {
+        socket.receiveBinary(new ArrayBuffer(6))
+        socket.receiveBinary(createPewsFrame(1, [0, 1], 200).slice(0, -1))
+        socket.receiveBinary(createPewsFrame(2, [8, 9], 200).slice(0, -1))
+    },
+    'zero station counts': socket => {
+        socket.receiveBinary(createPewsFrame(1, [], 200))
+        socket.receiveBinary(createPewsFrame(2, [], 200))
+    },
+    'nonzero padding': socket => {
+        for (const type of [1, 2]) {
+            const bytes = new Uint8Array(createPewsFrame(type, [0], 200))
+            bytes[bytes.length - 1] |= 1
+            socket.receiveBinary(bytes.buffer)
+        }
+    },
+    'unsupported protocol versions': socket => {
+        const frame = createPewsFrame(1, [0, 1], 200)
+        new DataView(frame).setUint8(0, 0x21)
+        socket.receiveBinary(frame)
+    },
+    'unknown binary message types': socket => {
+        const frame = createPewsFrame(2, [8, 9], 200)
+        new DataView(frame).setUint8(0, 0x13)
+        socket.receiveBinary(frame)
+    },
+}
+for (const [name, receive] of Object.entries(ignoredPewsMessages)) {
+    test(`Lipo PEWS ignores ${name} and preserves the valid snapshot and connection`, async context => {
+        const { sockets, advance } = setup(context)
+        const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+        context.after(() => client.close())
+        const messages = []
+        const closes = []
+        client.setMessageHandler(message => messages.push(message))
+        client.setCloseHandler(event => closes.push(event))
+        const socket = sockets[0]
+        socket.open()
+        socket.receive({ type: 'auth_ok' })
+        socket.receiveBinary(createPewsFrame(1, [0, 1], 100))
+        socket.receiveBinary(createPewsFrame(2, [1, 2], 100))
+        const snapshot = [...messages]
+        receive(socket)
+        assert.deepEqual(messages, snapshot)
+        assert.equal(client.authenticated, true)
+        assert.equal(client.pewsStationCount, 2)
+        assert.equal(client.lastError, null)
+        await advance(60000)
+        assert.equal(sockets.length, 1)
+        assert.equal(socket.readyState, 1)
+        assert.equal(client.shouldConnect, true)
+        assert.deepEqual(closes, [])
+        assert.deepEqual(socket.sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
+        socket.receiveBinary(createPewsFrame(2, [8, 9], 101))
+        assert.equal(messages.length, snapshot.length + 1)
+        assert.deepEqual(messages.at(-1).data.mmi, [8, 9])
+    })
+}
+
+for (const [name, receive] of Object.entries(invalidPewsMessages)) {
+    test(`Lipo PEWS retries ${name} once and recovers after authentication and a new list`, async context => {
+        const { sockets, advance } = setup(context)
+        const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+        context.after(() => client.close())
+        const messages = []
+        const closes = []
+        client.setMessageHandler(message => messages.push(message))
+        client.setCloseHandler(event => closes.push(event))
+        const socket = sockets[0]
+        socket.open()
+        socket.receive({ type: 'auth_ok' })
+        socket.receiveBinary(createPewsFrame(1, [0, 1], 100))
+        socket.receiveBinary(createPewsFrame(2, [1, 2], 100))
+        const snapshot = [...messages]
+        receive(socket)
+        receive(socket)
+        socket.finishClose({ code: 1006, reason: '' })
+        assert.deepEqual(messages, snapshot)
+        assert.equal(client.authenticated, false)
+        assert.equal(client.pewsStationCount, 0)
+        assert.equal(client.lastError, null)
+        assert.equal(client.shouldConnect, true)
+        assert.deepEqual(closes, [{ code: 0, reason: 'invalid PEWS message' }])
+        await advance(999)
+        assert.equal(sockets.length, 1)
+        await advance(1)
+        assert.equal(sockets.length, 2)
+        assert.equal(sockets[1].binaryType, 'arraybuffer')
+        sockets[1].open()
+        assert.deepEqual(sockets[1].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
+        sockets[1].receive({ type: 'auth_ok' })
+        sockets[1].receiveBinary(createPewsFrame(1, [1, 0], 100))
+        sockets[1].receiveBinary(createPewsFrame(2, [8, 9], 101))
+        assert.deepEqual(messages.at(-1).data.mmi, [8, 9])
+        await advance(60000)
+        assert.equal(sockets.length, 2)
+        assert.equal(sockets[1].readyState, 1)
+        assert.equal(closes.length, 1)
+    })
+}
+
+test('Lipo PEWS resets list pairing on every authentication acknowledgment', context => {
+    const { sockets } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    context.after(() => client.close())
+    const messages = []
+    client.setMessageHandler(message => messages.push(message))
+    const socket = sockets[0]
+    socket.open()
+    socket.receive({ type: 'auth_ok' })
+    socket.receiveBinary(createPewsFrame(1, [0], 100))
+    socket.receiveBinary(createPewsFrame(2, [1], 100))
+    socket.receive({ type: 'auth_ok' })
+    assert.equal(client.authenticated, true)
+    assert.equal(client.pewsStationCount, 0)
+    socket.receiveBinary(createPewsFrame(1, [0], 100))
+    socket.receiveBinary(createPewsFrame(2, [2], 101))
+    assert.deepEqual(messages.map(message => message.type), ['auth_ok', 'station_list', 'station_int', 'auth_ok', 'station_list', 'station_int'])
+    assert.deepEqual(messages.at(-1).data.mmi, [2])
+})
+
+test('Lipo PEWS resets backoff on auth_ok so each subsequent protocol failure retries after one second', async context => {
+    const { sockets, advance } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    context.after(() => client.close())
+    sockets[0].finishClose({ code: 1006, reason: '' })
+    await advance(1000)
+    sockets[1].finishClose({ code: 1006, reason: '' })
+    await advance(2000)
+    assert.equal(client.transport.retryIndex, 2)
+    for (let index = 2; index < 5; index++) {
+        sockets[index].open()
+        sockets[index].receive({ type: 'auth_ok' })
+        assert.equal(client.transport.retryIndex, 0)
+        sockets[index].receiveBinary(createPewsFrame(1, [0]))
+        sockets[index].receiveBinary(createPewsFrame(2, [15]))
+        await advance(999)
+        assert.equal(sockets.length, index + 1)
+        await advance(1)
+        assert.equal(sockets.length, index + 2)
+    }
+    const socket = sockets.at(-1)
+    socket.open()
+    socket.receive({ type: 'auth_ok' })
+    assert.equal(client.transport.retryIndex, 0)
+    socket.finishClose({ code: 1006, reason: '' })
+    const count = sockets.length
+    await advance(999)
+    assert.equal(sockets.length, count)
+    await advance(1)
+    assert.equal(sockets.length, count + 1)
+})
+
+test('Lipo PEWS does not treat component callback exceptions as binary protocol failures', async context => {
+    const { sockets, advance } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    context.after(() => client.close())
+    const socket = sockets[0]
+    socket.open()
+    socket.receive({ type: 'auth_ok' })
+    socket.receiveBinary(createPewsFrame(1, [0], 100))
+    const failure = new Error('component failure')
+    client.setMessageHandler(() => { throw failure })
+    assert.throws(() => socket.receiveBinary(createPewsFrame(2, [2], 101)), error => error === failure)
+    assert.equal(client.authenticated, true)
+    assert.equal(client.pewsStationCount, 1)
+    await advance(60000)
+    assert.equal(sockets.length, 1)
+    assert.equal(socket.readyState, 1)
+})
+
+test('Lipo PEWS preserves server error handling for forbidden paths, protocol errors, and opt-in auth retries', async context => {
+    const { sockets, advance } = setup(context)
+    const forbidden = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    const protocolError = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true })
+    const retrying = new LipoApiClient('wss://lipo.test/kma_pews', { key: 'test-key', pews: true, autoReconnectOnAuthFail: true })
+    context.after(() => { forbidden.close(); protocolError.close(); retrying.close() })
+    const messages = []
+    forbidden.setMessageHandler(message => messages.push(message))
+    sockets[0].open()
+    sockets[0].receive({ type: 'error', data: { code: 'PATH_FORBIDDEN', message: 'Forbidden' } })
+    assert.deepEqual(messages.at(-1), { type: 'error', data: { code: 'PATH_FORBIDDEN', message: 'Forbidden' } })
+    assert.equal(forbidden.shouldConnect, false)
+    sockets[1].open()
+    sockets[1].receive({ type: 'error', data: { code: 'AUTH_MESSAGE_INVALID' } })
+    assert.equal(protocolError.shouldConnect, false)
+    sockets[2].open()
+    sockets[2].receive({ type: 'error', data: { code: 'AUTH_FAILED' } })
+    assert.equal(retrying.shouldConnect, true)
+    assert.equal(retrying.authenticated, false)
+    await advance(999)
+    assert.equal(sockets.length, 3)
+    await advance(1)
+    assert.equal(sockets.length, 4)
+    sockets[3].open()
+    assert.deepEqual(sockets[3].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }])
+    retrying.close()
+    await advance(60000)
+    assert.equal(sockets.length, 4)
 })
 
 test('Lipo stops invalid credentials by default, backs off opt-in auth retries, and resets only after auth succeeds', async t => {
