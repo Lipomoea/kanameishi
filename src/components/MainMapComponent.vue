@@ -990,15 +990,24 @@ const loadMaps = async (retries = 0) => {
             firstMsg = true
         }, 1000);
     }
-    let promises, shouldRetry = false
-    if(!isTauri() && ('caches' in window)){
-        const cache = await caches.open('topojson')
-        promises = Object.keys(topojsonUrls).map(key=>cache.match(topojsonUrls[key]).then(res=>res?.json()))
+    let resps = [], shouldRetry = false
+    try {
+        let promises
+        if(!isTauri() && ('caches' in window)){
+            const cache = await caches.open('topojson')
+            promises = Object.keys(topojsonUrls).map(key=>cache.match(topojsonUrls[key]).then(res=>res?.json()))
+        }
+        else{
+            promises = Object.keys(topojsonUrls).map(async key => {
+                const res = await fetch(topojsonUrls[key])
+                if(!res.ok) throw new Error(`Failed to load map data: ${topojsonUrls[key]} (HTTP ${res.status})`)
+                return res.json()
+            })
+        }
+        resps = await Promise.all(promises)
+    } catch (err) {
+        console.error('Failed to load map data', err)
     }
-    else{
-        promises = Object.keys(topojsonUrls).map(key=>fetch(topojsonUrls[key]).then(res=>res?.json()))
-    }
-    const resps = await Promise.all(promises)
     if(isDisposed) return
     const [global, cn, cn_eew, cn_fault, jp, jp_eew, jp_tsunami, kr_eew, cn_tsunami] = resps
     if(global && cn && cn_eew && cn_fault && jp && jp_eew && kr_eew && jp_tsunami){

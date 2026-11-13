@@ -46,7 +46,10 @@ async function getGeojson(retries = 0){
   if(!inTauri && ('caches' in window)){
     try {
       const promises = Object.keys(topojsonUrls).map(async name => {
-        const data = await Http.get(topojsonUrls[name], { timeout: 0 })
+        const { data } = await Http.getResponse(topojsonUrls[name], { timeout: 0 })
+        if(data?.type !== 'Topology' || !data.objects?.region) {
+          throw new Error(`Invalid map data: ${topojsonUrls[name]}`)
+        }
         const cache = await caches.open('topojson')
         await cache.put(topojsonUrls[name], new Response(JSON.stringify(data)))
       })
