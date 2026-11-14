@@ -178,7 +178,7 @@ test('same selection, incomplete custom values and duplicate trials do not start
     state.selectScale(1)
     assert.equal(state.confirmVisible.value, false)
     state.selectScale('custom')
-    for(const value of [null, undefined, NaN, Infinity, 0, 49, 201, 113.5]) {
+    for(const value of [null, undefined, NaN, Infinity, 0, 19, 501, 113.5]) {
         state.customPercent.value = value
         state.tryCustomScale()
         assert.equal(state.confirmVisible.value, false)
@@ -192,10 +192,10 @@ test('same selection, incomplete custom values and duplicate trials do not start
 })
 
 test('restoration accepts automatic, bounds and custom values, and rejects invalid scale data', () => {
-    for(const value of [-1, 0.5, 1.13, 2]) {
+    for(const value of [-1, 0.2, 0.49, 0.5, 1.13, 2, 2.01, 5]) {
         assert.equal(createStore(JSON.stringify({ uiScale: value })).mainSettings.uiScale, value)
     }
-    for(const value of [null, '1.13', 0, -2, 0.49, 2.01]) {
+    for(const value of [null, '1.13', 0, -2, 0.19, 5.01]) {
         assert.equal(createStore(JSON.stringify({ uiScale: value })).mainSettings.uiScale, 1)
     }
 })
