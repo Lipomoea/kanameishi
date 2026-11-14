@@ -26,7 +26,7 @@
                     :disabled="confirmVisible"
                     aria-label="自定义UI缩放百分比"
                     size="small"
-                    style="width: 128px;"
+                    style="width: 96px;"
                 />
                 <span>%</span>
                 <el-button size="small" :disabled="confirmVisible || !validCustomPercent" @click="tryCustomScale">应用</el-button>
