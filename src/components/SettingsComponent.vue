@@ -925,22 +925,7 @@
                     </div>
                     <span class="font-bold w-full">UI</span>
                     <div class="switch-group">
-                        <div class="switch-full">
-                            <span>UI缩放比例</span>
-                            <el-select
-                                style="width: 120px;"
-                                v-model="settingsStore.mainSettings.uiScale"
-                                size="small"
-                            >
-                                <el-option label="自动" :value=-1 />
-                                <el-option label="50%" :value=0.5 />
-                                <el-option label="75%" :value=0.75 />
-                                <el-option label="100%（推荐）" :value=1 />
-                                <el-option label="125%" :value=1.25 />
-                                <el-option label="150%" :value=1.5 />
-                                <el-option label="200%" :value=2 />
-                            </el-select>
-                        </div>
+                        <UiScaleControl />
                     </div>
                     <span class="font-bold w-full">个性化</span>
                     <div class="switch-group">
@@ -1454,6 +1439,7 @@ import { platform, arch } from '@tauri-apps/plugin-os';
 import { isTauri as getIsTauri } from '@tauri-apps/api/core';
 import MarkdownIt from 'markdown-it';
 import DataSourceManager from './components/DataSourceManager.vue';
+import UiScaleControl from './components/UiScaleControl.vue';
 
 const SHOW_ABOUT_FLG = '20260313.00'
 

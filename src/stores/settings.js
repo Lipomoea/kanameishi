@@ -4,9 +4,12 @@ import { calcDistanceKm } from '@/utils/Utils';
 import { createDefaultDataSources, dataSourceCatalog, migrateDataSources } from '@/utils/DataSources';
 import { useAccessStore } from './access';
 import { parseSettings, restoreSettings } from '@/utils/SettingsRestore';
+import { isValidUiScale } from '@/utils/UiScale';
 
 const createDefaultSettings = () => {
     return {
+        // Preview stays outside the settings objects saved to localStorage.
+        uiScalePreview: null,
         mainSettings: {
             dataSources: createDefaultDataSources(),
             apiKeys: {
@@ -146,6 +149,7 @@ const mainSettingsArrayReaders = {
 export const useSettingsStore = defineStore('settingsStore', {
     state: createDefaultSettings,
     getters: {
+        effectiveUiScale: state => state.uiScalePreview ?? state.mainSettings.uiScale,
         isValidUserLatLng: (state) => state.mainSettings.userLatLng.every(item => item || item === 0) && !state.mainSettings.userLatLng.every(item => item === 0),
         isValidViewLatLng: (state) => state.mainSettings.viewLatLng.every(item => item || item === 0) && !state.mainSettings.viewLatLng.every(item => item === 0),
         isDisplayUser(state) { return this.isValidUserLatLng && state.mainSettings.displayUser },
@@ -248,6 +252,7 @@ export const useSettingsStore = defineStore('settingsStore', {
             const json = parseSettings(jsonString)
             json.dataSources = migrateDataSources(json.dataSources)
             this.mainSettings = restoreSettings(createDefaultSettings().mainSettings, json, mainSettingsArrayReaders)
+            if(!isValidUiScale(this.mainSettings.uiScale)) this.mainSettings.uiScale = 1
             if(!['realtime', 'complete'].includes(this.mainSettings.displaySeisNet.httpDataPriority)) {
                 this.mainSettings.displaySeisNet.httpDataPriority = 'realtime'
             }

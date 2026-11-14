@@ -72,7 +72,7 @@ const calcAutoScale = () => {
     autoScale.value = Math.min(window.innerWidth / 1800, window.innerHeight / 1000)
   }, 20);
 }
-const scale = computed(() => settingsStore.mainSettings.uiScale > 0 ? settingsStore.mainSettings.uiScale : autoScale.value)
+const scale = computed(() => settingsStore.effectiveUiScale > 0 ? settingsStore.effectiveUiScale : autoScale.value)
 
 const history2Eqlist = {
   'CENC': 'cencEqlist',

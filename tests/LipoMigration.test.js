@@ -5,6 +5,7 @@ import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { markRaw } from 'vue'
 import * as dataSources from '../src/utils/DataSources.js'
 import * as settingsRestore from '../src/utils/SettingsRestore.js'
+import * as uiScale from '../src/utils/UiScale.js'
 import * as usgsData from '../src/utils/UsgsData.js'
 import { decodeKmaPewsMessage } from '../src/utils/KmaPews.js'
 import { createPewsFrame } from './fixtures/KmaPews.js'
@@ -869,7 +870,7 @@ test('CENC raw Excel rows render station coordinates, intensity and optional val
 test('saved routes migrate to Lipo without migrating a FAN credential or bypassing ICL local authorization', () => {
     setActivePinia(createPinia())
     const store = evaluateStore('src/stores/settings.js', 'useSettingsStore', {
-        ...dataSources, ...settingsRestore, defineStore, useAccessStore: () => ({ canUse: () => false }),
+        ...dataSources, ...settingsRestore, ...uiScale, defineStore, useAccessStore: () => ({ canUse: () => false }),
     })
     store.setMainSettings(JSON.stringify({
         dataSources: { jmaEew: { wolfx: true, fan: false }, cwaEew: { wolfx: false, fan: true },
@@ -890,7 +891,7 @@ test('saved routes migrate to Lipo without migrating a FAN credential or bypassi
 test('KMA history can be selected and restored without adding it to an existing user selection', () => {
     setActivePinia(createPinia())
     const store = evaluateStore('src/stores/settings.js', 'useSettingsStore', {
-        ...dataSources, ...settingsRestore, defineStore, useAccessStore: () => ({ canUse: () => false }),
+        ...dataSources, ...settingsRestore, ...uiScale, defineStore, useAccessStore: () => ({ canUse: () => false }),
     })
     assert.ok(store.mainSettings.historySources.includes('KMA'))
     store.setMainSettings(JSON.stringify({ historySources: ['CENC', 'USGS'] }))
