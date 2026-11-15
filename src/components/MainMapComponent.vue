@@ -247,7 +247,7 @@
                             </div>
                         </div>
                         <div class="eew realtime" v-if="settingsStore.mainSettings.displaySeisNet.displayMaxInt && settingsStore.mainSettings.displaySeisNet.kmaNet && settingsStore.mainSettings.displaySeisNet.displayKmaInt">
-                            <div class="shindo-bar gray">KMA实时</div>
+                            <div class="shindo-bar gray">PEWS实时</div>
                             <div class="info">
                                 <div class="intensity" :class="setClassName(kmaMaxInt, false)">
                                     <div class="intensity-title">最大烈度</div>
@@ -262,7 +262,7 @@
                             </div>
                         </div>
                         <div class="eew realtime" v-if="settingsStore.mainSettings.displaySeisNet.displayPeriodMaxInt && settingsStore.mainSettings.displaySeisNet.kmaNet && settingsStore.mainSettings.displaySeisNet.displayKmaInt && kmaPeriodMaxInt != '?'">
-                            <div class="shindo-bar" :class="kmaPeriodBarClass">KMA区间</div>
+                            <div class="shindo-bar" :class="kmaPeriodBarClass">PEWS区间</div>
                             <div class="info">
                                 <div class="intensity" :class="setClassName(kmaPeriodMaxInt, false)">
                                     <div class="intensity-title">最大烈度</div>
