@@ -32,24 +32,95 @@ export const decodeTremRtsPayload = data => {
     return JSON.parse(strFromU8(gunzipSync(bytes)))
 }
 
-export const connectTremRts = (url, onFrame) => {
-    // EventSource handles SSE framing and reconnects after a lost connection.
-    const source = new EventSource(url)
-    let closed = false
-    const handleFrame = event => {
-        if(closed) return
+export const connectTremRts = (url, onFrame, fallbackUrls = []) => {
+    const urls = [...new Set([url, ...fallbackUrls])]
+    const retryDelays = [1000, 2000, 3000, 5000]
+    const networkEvents = typeof window === 'undefined' ? null : window
+    let stopped = false
+    let connection = null
+    let retryTimer = null
+    let sourceIndex = 0
+    let failures = 0
+    let sourceFailures = 0
+    const isCurrent = attempt => !stopped && connection === attempt
+    const closeConnection = () => {
+        const previous = connection
+        connection = null
+        if(!previous) return
+        clearTimeout(previous.timer)
+        previous.source?.removeEventListener('trem.rts.v1', previous.handleFrame)
+        previous.source?.removeEventListener('error', previous.handleError)
+        previous.source?.removeEventListener('close', previous.handleError)
+        previous.source?.close()
+    }
+    const retry = attempt => {
+        if(!isCurrent(attempt)) return
+        closeConnection()
+        failures++
+        sourceFailures++
+        if(sourceFailures >= 2) {
+            sourceIndex = (sourceIndex + 1) % urls.length
+            sourceFailures = 0
+        }
+        const timer = setTimeout(() => {
+            if(retryTimer !== timer) return
+            retryTimer = null
+            connect()
+        }, retryDelays[Math.min(failures - 1, retryDelays.length - 1)])
+        retryTimer = timer
+    }
+    const watchData = (attempt, timeout) => {
+        clearTimeout(attempt.timer)
+        const timer = setTimeout(() => {
+            if(attempt.timer !== timer) return
+            retry(attempt)
+        }, timeout)
+        attempt.timer = timer
+    }
+    const connect = () => {
+        if(stopped || connection) return
+        const attempt = { source: null, timer: null, handleFrame: null, handleError: null }
+        connection = attempt
+        attempt.handleError = () => retry(attempt)
+        attempt.handleFrame = event => {
+            if(!isCurrent(attempt)) return
+            try {
+                const frame = readTremFrame(decodeTremRtsPayload(event.data))
+                if(!frame) return
+                failures = 0
+                sourceFailures = 0
+                watchData(attempt, 5000)
+                onFrame(frame)
+            }
+            catch(err) {
+                console.log('TREM RTS 数据解析失败', err)
+            }
+        }
         try {
-            const frame = readTremFrame(decodeTremRtsPayload(event.data))
-            if(frame) onFrame(frame)
+            attempt.source = new EventSource(urls[sourceIndex])
+            attempt.source.addEventListener('trem.rts.v1', attempt.handleFrame)
+            attempt.source.addEventListener('error', attempt.handleError)
+            attempt.source.addEventListener('close', attempt.handleError)
+            watchData(attempt, 10000)
         }
         catch(err) {
-            console.log('TREM RTS 数据解析失败', err)
+            console.log('TREM RTS 连接失败', err)
+            retry(attempt)
         }
     }
-    source.addEventListener('trem.rts.v1', handleFrame)
+    const handleOnline = () => {
+        if(stopped || retryTimer === null) return
+        clearTimeout(retryTimer)
+        retryTimer = null
+        connect()
+    }
+    networkEvents?.addEventListener('online', handleOnline)
+    connect()
     return () => {
-        closed = true
-        source.removeEventListener('trem.rts.v1', handleFrame)
-        source.close()
+        stopped = true
+        clearTimeout(retryTimer)
+        retryTimer = null
+        closeConnection()
+        networkEvents?.removeEventListener('online', handleOnline)
     }
 }

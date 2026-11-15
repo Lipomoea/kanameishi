@@ -193,7 +193,11 @@ const restartTransport = (timelineSwitch = false) => {
     }
     else if(stationDataUrl.value) {
         const generation = requestGeneration
-        stopRealtime = connectTremRts(stationDataUrl.value, frame => commitFrame({ ...frame, generation }))
+        stopRealtime = connectTremRts(
+            stationDataUrl.value,
+            frame => commitFrame({ ...frame, generation }),
+            tremConfig.value.stationSources.map(source => source.url)
+        )
     }
 }
 onMounted(()=>{

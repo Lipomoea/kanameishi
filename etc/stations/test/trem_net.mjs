@@ -57,6 +57,7 @@ class FakeEventSource {
     removeEventListener(type, fn) { if(this.listeners.get(type) === fn) this.listeners.delete(type) }
     close() { this.closed = true }
     emit(payload) { this.listeners.get('trem.rts.v1')?.({ data: encode(payload) }) }
+    fail() { this.listeners.get('error')?.() }
 }
 const originalEventSource = globalThis.EventSource
 globalThis.EventSource = FakeEventSource
@@ -120,6 +121,16 @@ const setup = new Function(...Object.keys(imports), script.replace(/^import .*$/
 const scope = effectScope()
 const settle = async () => { await Promise.resolve(); await nextTick(); await Promise.resolve(); await nextTick() }
 const poll = () => { assert.equal(intervals.size, 1); [...intervals.values()][0].fn(); return requests.at(-1) }
+const runTimeout = milliseconds => {
+    const entry = [...timeouts].find(([, timer]) => timer.ms === milliseconds)
+    assert.ok(entry, `Expected a ${milliseconds} ms timer`)
+    const [timerId, timer] = entry
+    timeouts.delete(timerId)
+    return timer.fn()
+}
+const originalSetTimeout = globalThis.setTimeout, originalClearTimeout = globalThis.clearTimeout
+globalThis.setTimeout = imports.setTimeout
+globalThis.clearTimeout = imports.clearTimeout
 let app
 try {
     app = scope.run(() => setup(...Object.values(imports)))
@@ -143,6 +154,9 @@ try {
     assert.equal(provided.tremMaxShindo.value, '3')
     for(const ts of [base, base - 1000]) first.emit(frame(ts, { '1A50B18': { i: 6, alert: 1 } }))
     assert.equal(app.stations['1A50B18'].intensity, 2.6, 'Duplicate and older frames cannot overwrite the map')
+    first.emit(frame(base + 500, { '1A50B18': { i: 0.4, alert: 1 } }))
+    assert.equal(app.stations['1A50B18'].intensity, 0.4, 'A second frame within the same second updates the station')
+    assert.equal(provided.tremUpdateTime.value, base + 500)
     first.emit(frame(base + 1000, { '1A50B18': { i: 0.1 }, '0012345': { i: null, alert: 1 } }))
     await settle()
     assert.equal(status.isActive.tremNet, false, 'Missing alert is inactive')
@@ -158,7 +172,7 @@ try {
     document.visibilityState = 'visible'
     app.handleVisibilityChange()
     assert(redraws > beforeHidden)
-    const refresh = app.fetchStationList()
+    const refresh = runTimeout(10 * 60 * 1000)
     requests.at(-1).resolve(csv + '3,NEW,24,121,1,100,3,2026-02-16,1\n')
     await refresh
     await settle()
@@ -167,24 +181,51 @@ try {
     first.emit(frame(base + 3000, { NEW: { i: 2.2, alert: 1 } }))
     await settle()
     assert.equal(app.stations.NEW.intensity, 2.2, 'Roster refresh does not invalidate the connection generation')
-    const badList = app.fetchStationList()
+    const badList = runTimeout(10 * 60 * 1000)
     requests.at(-1).resolve('<html>upstream unavailable</html>')
     await badList
     assert.equal(Object.keys(app.stations).length, 3, 'Failed list parsing retains the roster')
     console.log('PASS early frames, numeric alerts, missing data, visibility and roster refresh')
 
     const staleListener = first.listeners.get('trem.rts.v1')
-    settings.mainSettings.displaySeisNet.tremApi = 'second'
+    first.fail()
     assert.equal(first.closed, true)
+    assert.equal(app.stations.NEW.intensity, 2.2, 'Disconnecting retains the displayed intensity')
+    assert.equal(status.isActive.tremNet, true, 'Disconnecting retains station activity')
+    assert.equal(provided.tremUpdateTime.value, base + 3000)
+    runTimeout(1000)
+    assert.equal(connections.at(-1).url, sources[0].url)
+    connections.at(-1).fail()
+    runTimeout(2000)
+    const fallback = connections.at(-1)
+    assert.equal(fallback.url, sources[1].url, 'Two failures switch to a configured fallback')
+    assert.equal(settings.mainSettings.displaySeisNet.tremApi, 'lb-1', 'Failover preserves the selected preference')
+    staleListener({ data: encode(frame(base + 99_000, { NEW: { i: 7, alert: 1 } })) })
+    fallback.emit(frame(base + 2000, { NEW: { i: 6, alert: 1 } }))
+    assert.equal(app.stations.NEW.intensity, 2.2, 'A recovered node cannot roll the displayed timestamp backward')
+    fallback.emit(frame(base + 3500, { NEW: { i: 2.4, alert: 1 } }))
+    assert.equal(app.stations.NEW.intensity, 2.4)
+    assert.equal(provided.tremUpdateTime.value, base + 3500)
+    fallback.fail()
+    const retryBeforeSwitch = [...timeouts.values()].find(timer => timer.ms === 1000).fn
+    settings.mainSettings.displaySeisNet.tremApi = 'second'
+    assert.equal(fallback.closed, true)
     const second = connections.at(-1)
     assert.equal(second.url, sources[1].url)
+    retryBeforeSwitch()
+    assert.equal(connections.at(-1), second, 'Manual switching cancels a pending recovery')
     staleListener({ data: encode(frame(base + 99_000, { NEW: { i: 7, alert: 1 } })) })
     second.emit(frame(base + 4000, { NEW: { i: 1.4, alert: 1 } }))
     assert.equal(app.stations.NEW.intensity, 1.4, 'A closed source cannot advance the timestamp')
     settings.mainSettings.displaySeisNet.httpDataPriority = 'complete'
     assert.equal(connections.at(-1), second, 'HTTP ordering changes do not restart realtime')
+    second.fail()
+    const retryBeforeReplay = [...timeouts.values()].find(timer => timer.ms === 1000).fn
     status.seisNetReplayDelay = 1
     assert.equal(second.closed, true)
+    retryBeforeReplay()
+    assert.equal(connections.at(-1), second, 'Entering replay cannot revive a realtime retry')
+    assert.equal([...timeouts.values()].some(timer => timer.ms === 1000), false)
     assert.equal(intervals.size, 1)
     assert.equal(requests.at(-1).url, 'https://archive.example/rts/5940?key=test')
     requests.at(-1).resolve(frame(base - 60_000, { NEW: { i: 0.8, alert: 1 } }))
@@ -219,12 +260,16 @@ try {
     resumed.emit(frame(base + 5000, { NEW: { i: 1.5, alert: 1 } }))
     await settle()
     assert.equal(provided.tremUpdateTime.value, base + 5000)
-    console.log('PASS node switching, replay ordering, backward seeks and late-response isolation')
+    console.log('PASS recovery preserves the map, preference and 2 Hz frames; switching and replay isolate retries')
 
-    const pendingList = app.fetchStationList()
+    const pendingList = runTimeout(10 * 60 * 1000)
     const listRequest = requests.at(-1)
+    resumed.fail()
+    const retryBeforeUnmount = [...timeouts.values()].find(timer => timer.ms === 1000).fn
     unmounted.forEach(fn => fn())
     scope.stop()
+    retryBeforeUnmount()
+    assert.equal(connections.at(-1), resumed, 'Unmounting cancels all realtime recovery')
     assert.equal(resumed.closed, true)
     assert.equal(listRequest.options.signal.aborted, true)
     listRequest.resolve(csv)
@@ -233,9 +278,12 @@ try {
     assert.equal(status.isActive.tremNet, false)
     assert.deepEqual(Object.keys(app.stations), [])
     assert.equal(intervals.size, 0)
+    assert.equal(timeouts.size, 0)
     console.log('PASS teardown closes SSE, aborts requests and releases station layers')
 }
 finally {
     scope.stop()
     globalThis.EventSource = originalEventSource
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
 }
