@@ -162,6 +162,26 @@ try {
     assert.equal(status.isActive.tremNet, false, 'Missing alert is inactive')
     assert.equal(app.stations['0012345'].isActive, false, 'Invalid intensity cannot activate a station')
 
+    first.emit(frame(base + 1250, { '1A50B18': { i: -2.9, alert: 1 }, '0012345': { i: -4, alert: 1 } }))
+    await settle()
+    assert.equal(app.stations['1A50B18'].intensity, -2.9, 'Valid negative intensity is preserved')
+    assert.equal(app.stations['1A50B18'].level, 1)
+    assert.equal(app.stations['1A50B18'].isActive, true)
+    assert.equal(app.stations['0012345'].intensity, -3.1, 'Values below -3 use the missing-data sentinel')
+    assert.equal(app.stations['0012345'].isActive, false)
+    assert.equal(provided.tremMaxShindo.value, '0')
+    assert.equal(status.isActive.tremNet, true)
+    first.emit(frame(base + 1500, { '1A50B18': { i: -3, alert: 1 }, '0012345': { i: -3.1, alert: 1 } }))
+    await settle()
+    for(const station of Object.values(app.stations)) {
+        assert.equal(station.intensity, -3.1)
+        assert.equal(station.level, -1, 'No signal is missing data instead of a valid minimum intensity')
+        assert.equal(station.shindo, '?')
+        assert.equal(station.isActive, false, 'No signal cannot activate a station')
+    }
+    assert.equal(provided.tremMaxShindo.value, '?', 'An all-no-signal frame has no maximum intensity')
+    assert.equal(status.isActive.tremNet, false)
+
     document.visibilityState = 'hidden'
     const beforeHidden = redraws
     first.emit(frame(base + 2000, { '1A50B18': { i: 3, alert: 1 }, NEW: { i: 1.2, alert: 1 } }))

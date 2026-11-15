@@ -602,16 +602,16 @@ export class TremStation {
         const oldMarkerType = this.markerType
         const oldColor = this.color
         const oldRadius = this.radius
-        this.setColorRadius()
+        const { colorLevel, colorShindo } = this.setColorRadius()
         const zoom = this.map.getZoom()
-        this.markerType = getTremMarkerType(this.level, zoom)
+        this.markerType = getTremMarkerType(colorLevel, zoom)
         if(this.markerType == oldMarkerType && this.color == oldColor && this.radius == oldRadius) return
         if((this.markerType == 2) != (oldMarkerType == 2) || this.color != oldColor) {
             if(this.marker && this.map.hasLayer(this.marker)) this.map.removeLayer(this.marker)
             switch(this.markerType) {
                 case 2:
                     const iconZoom = Math.min(Math.max(zoom, 6), 10)
-                    const shindoIcon = shindoIcons[iconZoom][this.shindo]
+                    const shindoIcon = shindoIcons[iconZoom][colorShindo]
                     this.marker = markRaw(L.marker(this.latLng, {
                         icon: shindoIcon,
                         pane: `tremStationPane${this.level}`,
@@ -619,7 +619,7 @@ export class TremStation {
                     }))
                     break
                 case 1:
-                    const color = shindoColorBand[this.level]
+                    const color = shindoColorBand[colorLevel]
                     const radius = Math.max(this.radius, 2)
                     this.marker = markRaw(L.circleMarker(this.latLng, {
                         radius: radius * 1.8,
@@ -651,11 +651,11 @@ export class TremStation {
             switch(this.markerType) {
                 case 2:
                     const iconZoom = Math.min(Math.max(zoom, 6), 10)
-                    const shindoIcon = shindoIcons[iconZoom][this.shindo]
+                    const shindoIcon = shindoIcons[iconZoom][colorShindo]
                     this.marker.setIcon(shindoIcon)
                     break
                 case 1:
-                    const color = shindoColorBand[this.level]
+                    const color = shindoColorBand[colorLevel]
                     const radius = Math.max(this.radius, 2)
                     this.marker.setStyle({
                         color: '#ffffff',
@@ -674,35 +674,35 @@ export class TremStation {
         }
     }
     getColorRadius(zoom){
-        // Remap quiet readings only for dot colors; keep missing data and intensity levels.
         const intensity = this.intensity
         const colorIntensity = this.level < 0 || intensity >= 0.5 ? intensity
-            : intensity <= 0 ? -3 : intensity * 7 - 3
+            : intensity <= -0.2 ? -3 : intensity * 5 - 2
         const colorLevel = getLevelFromInstShindo(colorIntensity)
         const { color } = getNiedColorRadius(colorLevel, zoom)
         const { radius } = getNiedColorRadius(this.level, zoom)
-        return { color, radius }
+        return { color, radius, colorLevel, colorShindo: getShindoFromInstShindo(colorIntensity) }
     }
     setColorRadius(){
         const zoom = this.map.getZoom()
-        const { color, radius } = this.getColorRadius(zoom)
-        this.color = color
-        this.radius = radius
+        const appearance = this.getColorRadius(zoom)
+        this.color = appearance.color
+        this.radius = appearance.radius
+        return appearance
     }
     getCanvasDrawInfo(zoom = this.map.getZoom()){
         if(!settingsStore) settingsStore = useSettingsStore()
-        const { color, radius } = this.getColorRadius(zoom)
+        const { color, radius, colorLevel, colorShindo } = this.getColorRadius(zoom)
         return {
             latLng: this.latLng,
             level: this.level,
             drawOrder: this.intensity,
-            simpleColorLevel: this.level,
+            simpleColorLevel: colorLevel,
             intensity: this.intensity,
             shindo: this.shindo,
-            iconKey: this.shindo,
+            iconKey: colorShindo,
             color,
             radius,
-            markerType: getTremMarkerType(this.level, zoom)
+            markerType: getTremMarkerType(colorLevel, zoom)
         }
     }
     terminate(){

@@ -79,7 +79,7 @@ const update = ()=>{
     let maxInst = -3.1
     Object.keys(stations).forEach(id=>{
         const data = stationFrame.data[id]
-        if(Number.isFinite(data?.i)){
+        if(Number.isFinite(data?.i) && data.i > -3){
             const alert = !!data.alert
             const intensity = data.i
             stations[id].update(intensity, alert, render)
