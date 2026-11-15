@@ -390,8 +390,8 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.depthText = '深さ: ' + data.Depth + 'km'
                                 eqMessage.originTime = data.OriginTime.replace(/\//g, '-')
                                 eqMessage.originTimeText = '発震時刻: ' + data.OriginTime.replace(/\//g, '-') + ' (JST)'
-                                eqMessage.magnitude = data.Magunitude
-                                eqMessage.magnitudeText = 'マグニチュード: ' + data.Magunitude.toFixed(1)
+                                eqMessage.magnitude = data.Magnitude
+                                eqMessage.magnitudeText = 'マグニチュード: ' + data.Magnitude.toFixed(1)
                                 eqMessage.maxIntensity = data.MaxIntensity
                                 if(data.isCancel){
                                     eqMessage.reportNumText = 'キャンセル報'
@@ -475,8 +475,8 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.depthText = '深度: ' + data.Depth + 'km'
                                 eqMessage.originTime = data.OriginTime
                                 eqMessage.originTimeText = '時間: ' + data.OriginTime
-                                eqMessage.magnitude = data.Magunitude
-                                eqMessage.magnitudeText = '規模: ' + data.Magunitude.toFixed(1)
+                                eqMessage.magnitude = data.Magnitude
+                                eqMessage.magnitudeText = '規模: ' + data.Magnitude.toFixed(1)
                                 eqMessage.maxIntensity = data.MaxIntensity || '不明'
                                 eqMessage.maxIntensityText = '預估最大震度: ' + eqMessage.maxIntensity
                                 eqMessage.isWarn = getShindoRank(eqMessage.maxIntensity) >= 5
