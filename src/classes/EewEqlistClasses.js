@@ -384,8 +384,8 @@ export class EewEvent {
         eqMessage.reportNum == this.eqMessage.reportNum && eqMessage.isCanceled > this.eqMessage.isCanceled || 
         isAddition) {
             if(eqMessage.isCanceled) {
-                const { isCanceled, title, titleText, reportNum, reportNumText, reportTime, className } = eqMessage
-                Object.assign(this.eqMessage, { isCanceled, title, titleText, reportNum, reportNumText, reportTime, className })
+                const { type, isCanceled, title, titleText, reportNum, reportNumText, reportTime, className } = eqMessage
+                Object.assign(this.eqMessage, { type, isCanceled, title, titleText, reportNum, reportNumText, reportTime, className })
                 if(eqMessage.source === 'gqEew' && eqMessage.quality != null) this.eqMessage.quality = eqMessage.quality
                 this.renderStop()
             }

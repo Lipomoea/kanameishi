@@ -11,6 +11,13 @@ import { decodeKmaPewsMessage } from '../src/utils/KmaPews.js'
 import { createPewsFrame } from './fixtures/KmaPews.js'
 
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8')
+const utilsSource = read('src/utils/Utils.js')
+const shindoNames = ['shindoScale', 'formatShindo', 'getShindoRank', 'getShindoFromInstShindo', 'setClassName']
+const shindoUtils = new Function(shindoNames.map(name => {
+    const start = utilsSource.indexOf(`export const ${name} =`)
+    assert.notEqual(start, -1, name)
+    return utilsSource.slice(start, utilsSource.indexOf('\nexport ', start + 1)).replace('export const ', 'const ')
+}).join('\n') + `\nreturn { ${shindoNames.join(', ')} };`)()
 const evaluateStore = (path, name, dependencies, result = `${name}()`) => {
     const source = read(path)
         .replace(/^import[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
@@ -31,7 +38,7 @@ const setup = () => {
         get: async () => http.feed,
     }
     const { store, sourceTypes, getProviderLabel } = evaluateStore('src/stores/status.js', 'useStatusStore', {
-        ...dataSources, ...usgsData, defineStore, Http: http,
+        ...dataSources, ...usgsData, ...shindoUtils, defineStore, Http: http,
         eqUrls: {
             cencIr_http: 'https://example.test/cenc-ir', usgsEqlist_http: 'https://example.test/feed',
             jmaEqlist_http: 'https://example.test/quake',
@@ -39,11 +46,10 @@ const setup = () => {
         tsunamiUrls: { jmaTsunami_http: 'https://example.test/tsunami' },
         iconUrls: {}, isTauri: () => false, useSettingsStore: () => settings,
         systemTimeZone: 8, timeToStamp, stampToTime,
+        convertCompactTimeString: () => null,
         convertTimeString: (value, zone) => stampToTime(timeToStamp(value, zone), 8),
         calcTimeDiff: (a, az, b, bz) => timeToStamp(a, az) - timeToStamp(b, bz),
         getFEName: () => '', setClassName: (value, shindo, canceled) => canceled ? 'gray' : 'white',
-        formatShindo: value => value?.replace('級', '').replace('弱', '-').replace('強', '+'),
-        getShindoRank: value => ['0', '1', '2', '3', '4', '5弱', '5強', '6弱', '6強', '7'].indexOf(value),
         calcCsisLevel: (magnitude, depth, distance) => {
             intensityCalculations.push([magnitude, depth, distance])
             return Number.isFinite(magnitude) && magnitude >= 0 ? '3' : '?'
@@ -57,6 +63,7 @@ const setup = () => {
     return { store, settings, messages, sounds, http, calls, warnings, intensityCalculations, sourceTypes, getProviderLabel }
 }
 const event = (overrides = {}) => ({
+    source: 0,
     eventId: 'event-1', reportNum: 2, originTime: '2026-11-04 01:02:03', reportTime: '2026-11-04 01:02:10',
     originTimeStamp: Date.parse('2026-11-04T01:02:03Z'), reportTimeStamp: Date.parse('2026-11-04T01:02:10Z'),
     epicenter: 'test', latitude: 35, longitude: 140, depth: 0, magnitude: 4.2, maxIntensity: 0,
@@ -250,11 +257,11 @@ test('CWA reports use the supplied report time or the unchanged origin time', ()
     }
 })
 
-test('Lipo JMA translates cancellation and final/training flags without changing provider priority', () => {
+test('Lipo JMA translates cancellation and final/training flags with its upstream priority', () => {
     const { store } = setup()
     store.setEqMessage('jmaEew', event({ maxIntensity: '5弱', isWarn: true, isFinal: true, isTraining: true, isCanceled: true }), 'lipo')
     const message = store.eqMessage.jmaEew
-    assert.equal(message.type, 1)
+    assert.equal(message.type, 2)
     assert.equal(message.isCanceled, true)
     assert.equal(message.isFinal, true)
     assert.equal(message.reportNum, 2)
@@ -268,17 +275,109 @@ test('Lipo JMA translates cancellation and final/training flags without changing
     assert.equal(message.magnitudeText, 'マグニチュード: 不明')
 })
 
+test('JMA assumption methods use provider-specific fields and clear the text on regular reports', () => {
+    const { store } = setup()
+    const wolfx = {
+        EventID: 'jma-methods', Serial: 1, AnnouncedTime: '2026/11/04 01:02:10',
+        OriginTime: '2026/11/04 01:02:03', Title: 'test', Hypocenter: 'test',
+        Latitude: 35, Longitude: 140, Depth: 10, Magnitude: 5, MaxIntensity: '5弱',
+        WarnArea: [], isCancel: false, isAssumption: false,
+    }
+    for(const [fields, text] of [
+        [{ CodeType: '最大予測震度のみの緊急地震速報', Magnitude: 0 }, '大きな加速度を検知'],
+        [{ isAssumption: true, Magnitude: 1 }, '仮定震源要素'],
+        [{ CodeType: '最大予測震度のみの緊急地震速報', isAssumption: true }, '大きな加速度を検知'],
+        [{ Magnitude: 0 }, ''],
+        [{ Magnitude: 1 }, ''],
+        [{}, ''],
+    ]) {
+        store.setEqMessage('jmaEew', { ...wolfx, ...fields }, 'wolfx')
+        assert.equal(store.eqMessage.jmaEew.isAssumption, text !== '')
+        assert.equal(store.eqMessage.jmaEew.assumptionText, text)
+    }
+    for(const source of [0, 1]) {
+        for(const magnitude of [0, undefined, null]) {
+            const data = event({ source, magnitude, depth: null })
+            if(magnitude === undefined) delete data.magnitude
+            store.setEqMessage('jmaEew', data, 'lipo')
+            assert.equal(store.eqMessage.jmaEew.isAssumption, true)
+            assert.equal(store.eqMessage.jmaEew.assumptionText, '大きな加速度を検知')
+        }
+        store.setEqMessage('jmaEew', event({ source, magnitude: 1, depth: 10 }), 'lipo')
+        assert.equal(store.eqMessage.jmaEew.isAssumption, true)
+        assert.equal(store.eqMessage.jmaEew.assumptionText, '仮定震源要素')
+        for(const fields of [{ magnitude: 1, depth: 0 }, { magnitude: 1, depth: null }, { magnitude: 1, depth: undefined }, { magnitude: 1.1, depth: 10 }]) {
+            store.setEqMessage('jmaEew', event({ source, ...fields }), 'lipo')
+            assert.equal(store.eqMessage.jmaEew.isAssumption, false)
+            assert.equal(store.eqMessage.jmaEew.assumptionText, '')
+        }
+    }
+    store.setEqMessage('jmaEew', event({ magnitude: 0 }), 'lipo')
+    store.setEqMessage('jmaEew', wolfx, 'wolfx')
+    assert.equal(store.eqMessage.jmaEew.isAssumption, false)
+    assert.equal(store.eqMessage.jmaEew.assumptionText, '')
+    store.setEqMessage('jmaEew', { ...wolfx, isAssumption: true }, 'wolfx')
+    store.setEqMessage('jmaEew', event(), 'lipo')
+    assert.equal(store.eqMessage.jmaEew.isAssumption, false)
+    assert.equal(store.eqMessage.jmaEew.assumptionText, '')
+
+    for(const useShindo of [false, true]) {
+        for(const isAssumption of [true, false]) {
+            store.setEqMessage('mockEew', { useShindo, isAssumption, assumptionText: 'old text' }, 'mock')
+            assert.equal(store.eqMessage.mockEew.assumptionText, isAssumption ? '假定震源要素' : '')
+        }
+    }
+    assert.equal(store.eqMessage.ceaEew.assumptionText, '')
+})
+
+test('Lipo JMA upstream priority preserves provider labels and replaces regional forecasts', () => {
+    const { store, getProviderLabel, warnings } = setup()
+    const values = ['5+', '6弱', 'over', '不明', '0', undefined, null, 4]
+    const warnArea = values.map((to, index) => ({ name: `area-${index}`, code: index, intensity: { from: '4', to } }))
+    store.receiveLipoMessage({ type: 'jma_eew', data: event({ source: 1, warnArea, maxIntensity: '6弱' }) })
+    const message = store.eqMessage.jmaEew
+    assert.equal(message.type, 1)
+    assert.equal(message.source, 'jmaEew')
+    assert.equal(Object.hasOwn(message, 'lipoSource'), false)
+    assert.equal(getProviderLabel(message), 'Lipo1')
+    assert.deepEqual(JSON.parse(message.warnArea).map(({ name, intensity }) => [name, intensity]),
+        ['5強', '6弱', '不明', '不明', '0', '不明', '不明', '不明'].map((intensity, index) => [`area-${index}`, intensity]))
+    for(const fields of [
+        { source: 0, reportNum: 3, warnArea: null },
+        { source: 0, warnArea },
+        { source: 1, warnArea: [] },
+        { source: 1, warnArea: null },
+        { source: 1, warnArea: undefined },
+        { source: 1, warnArea, isCanceled: true },
+    ]) {
+        store.setEqMessage('jmaEew', event({ source: 1, warnArea }), 'lipo')
+        store.setEqMessage('jmaEew', event(fields), 'lipo')
+        assert.equal(message.warnArea, '[]')
+        assert.equal(message.type, fields.source === 1 ? 1 : 2)
+        assert.equal(getProviderLabel(message), fields.source === 1 ? 'Lipo1' : 'Lipo0')
+    }
+    const previous = { ...message }
+    for(const source of [2, undefined, null]) {
+        store.receiveLipoMessage({ type: 'jma_eew', data: event({ source }) })
+        assert.deepEqual(message, previous)
+    }
+    assert.equal(warnings.length, 3)
+})
+
 test('provider routing follows sourceTypes after reordering, including single-provider sources', () => {
     const { store, sourceTypes, getProviderLabel } = setup()
-    sourceTypes.jmaEew = { 0: 'lipo', 1: 'wolfx' }
+    sourceTypes.jmaEew = { 0: 'lipo_0', 1: 'wolfx', 2: 'lipo_1' }
     store.receiveLipoMessage({ type: 'jma_eew', data: event({ maxIntensity: '4' }) })
     assert.equal(store.eqMessage.jmaEew.type, 0)
     assert.equal(store.eqMessage.jmaEew.id, 'event-1')
-    assert.equal(getProviderLabel(store.eqMessage.jmaEew), 'Lipo')
+    assert.equal(getProviderLabel(store.eqMessage.jmaEew), 'Lipo0')
+    store.receiveLipoMessage({ type: 'jma_eew', data: event({ source: 1, maxIntensity: '4' }) })
+    assert.equal(store.eqMessage.jmaEew.type, 2)
+    assert.equal(getProviderLabel(store.eqMessage.jmaEew), 'Lipo1')
     store.setEqMessage('jmaEew', {
         EventID: 'wolfx-event', Serial: 3, AnnouncedTime: '2026/11/04 01:02:10',
         OriginTime: '2026/11/04 01:02:03', Title: 'test', Hypocenter: 'Wolfx event',
-        Latitude: 35, Longitude: 140, Depth: 10, Magunitude: 4.2, MaxIntensity: '4',
+        Latitude: 35, Longitude: 140, Depth: 10, Magnitude: 4.2, MaxIntensity: '4',
         WarnArea: [], isCancel: false,
     }, 'wolfx')
     assert.equal(store.eqMessage.jmaEew.type, 1)
@@ -305,7 +404,7 @@ test('provider routing follows sourceTypes after reordering, including single-pr
     sourceTypes.cwaEew = { 2: 'wolfx' }
     store.setEqMessage('cwaEew', {
         ID: 'cwa-event', ReportNum: 1, ReportTime: event().reportTime, OriginTime: event().originTime,
-        HypoCenter: 'CWA event', Latitude: 24, Longitude: 121, Depth: 10, Magunitude: 5, MaxIntensity: '4',
+        HypoCenter: 'CWA event', Latitude: 24, Longitude: 121, Depth: 10, Magnitude: 5, MaxIntensity: '4',
     }, 'wolfx')
     assert.equal(store.eqMessage.cwaEew.type, 2)
     assert.equal(store.eqMessage.cwaEew.id, 'cwa-event')
@@ -387,12 +486,82 @@ test('CENC and CWA lists use new IDs/fields, preserve Wolfx merge, and replace e
     assert.equal(store.history.cencEqlist[0].id, 'cenc:123')
     store.setHistory('cwaEqlist', [event({ eventId: 'cwa:123', maxIntensity: '5弱', url: 'https://example.test/event' })], 'lipo')
     assert.equal(store.history.cwaEqlist[0].id, 'cwa:123')
-    assert.equal(store.history.cwaEqlist[0].maxIntensity, '5-')
+    assert.equal(store.history.cwaEqlist[0].maxIntensity, '5弱')
     assert.equal(store.history.cwaEqlist[0].url, 'https://example.test/event')
     store.setHistory('cwaEqlist', [], 'lipo')
     assert.equal(store.history.cwaEqlist.length, 0)
     store.setHistory('cencEqlist', [], 'lipo')
     assert.equal(store.history.cencEqlist[0].id, 'wolfx:123')
+})
+
+test('JMA/CWA history and replay keep kanji while display formatting and intensity ranks stay equivalent', () => {
+    const { store } = setup()
+    const component = read('src/components/components/EqlistHistory.vue')
+    const source = component.slice(component.indexOf('const createMockEew'), component.indexOf('</script>'))
+    const pending = []
+    const dependencies = {
+        statusStore: store, ...shindoUtils, replayLeadSeconds: 5, replayState: {},
+        timeStore: { getTimeStamp: () => 1 },
+        dayjs: () => ({ add() { return this }, utcOffset() { return this }, format: () => event().originTime }),
+        setTimeout: callback => pending.push(callback),
+    }
+    const createMockEew = new Function(...Object.keys(dependencies), source + '\nreturn createMockEew;')(...Object.values(dependencies))
+    for(const [symbol, kanji] of [['0', '0'], ['5-', '5弱'], ['5+', '5強'], ['6-', '6弱'], ['6+', '6強'], ['?', '不明'], [null, '不明'], [undefined, '不明'], ['', '不明']]) {
+        store.setHistory('jmaEqlist', { No1: {
+            EventID: 'jma-history', time_full: '2026/11/04 01:02:03', location: 'test',
+            latitude: '35', longitude: '140', depth: '10km', magnitude: '5', shindo: symbol,
+        } }, 'wolfx')
+        store.setHistory('cwaEqlist', [event({ maxIntensity: symbol ? kanji + '級' : symbol })], 'lipo')
+        for(const name of ['jmaEqlist', 'cwaEqlist']) {
+            const item = store.history[name][0]
+            assert.equal(item.maxIntensity, kanji, name)
+            createMockEew(item)
+            pending.pop()()
+            assert.equal(store.eqMessage.mockEew.maxIntensity, kanji)
+            assert.equal(store.eqMessage.mockEew.maxIntensityText, '推定最大震度: ' + kanji)
+            assert.equal(store.eqMessage.mockEew.isWarn, shindoUtils.getShindoRank(symbol) >= 5)
+            assert.equal(shindoUtils.formatShindo(item.maxIntensity), symbol || '?')
+            assert.equal(shindoUtils.formatShindo(symbol), symbol || '?')
+            assert.equal(shindoUtils.formatShindo(symbol, false), kanji)
+            assert.equal(shindoUtils.setClassName(item.maxIntensity, true), shindoUtils.setClassName(symbol, true))
+        }
+    }
+})
+
+test('live shindo messages normalize symbols before composing text and preserve cancellation and missing values', () => {
+    const { store } = setup()
+    const wolfx = {
+        EventID: 'jma-live', ID: 'cwa-live', Serial: 1, ReportNum: 1,
+        AnnouncedTime: '2026/11/04 01:02:10', ReportTime: event().reportTime, OriginTime: event().originTime,
+        Title: 'test', Hypocenter: 'test', HypoCenter: 'test', Latitude: 35, Longitude: 140,
+        Depth: 10, Magnitude: 5, MaxIntensity: '5+', WarnArea: [{ Chiiki: 'test', Shindo1: '6-' }],
+    }
+    for(const name of ['jmaEew', 'cwaEew']) {
+        store.setEqMessage(name, wolfx, 'wolfx')
+        assert.equal(store.eqMessage[name].maxIntensity, '5強')
+        assert.ok(store.eqMessage[name].maxIntensityText.endsWith('5強'))
+    }
+    assert.equal(JSON.parse(store.eqMessage.jmaEew.warnArea)[0].intensity, '6弱')
+    store.setEqMessage('jmaEew', { ...wolfx, isCancel: true, MaxIntensity: '' }, 'wolfx')
+    assert.equal(store.eqMessage.jmaEew.maxIntensity, '不明')
+    assert.equal(store.eqMessage.jmaEew.maxIntensityText, '推定最大震度: なし')
+    for(const name of ['jmaEew', 'cwaEqlist']) {
+        for(const [input, expected] of [['6+級', '6強'], ['0', '0'], ['?', '不明'], [null, '不明'], [undefined, '不明'], ['', '不明']]) {
+            store.setEqMessage(name, event({ maxIntensity: input }), 'lipo')
+            assert.equal(store.eqMessage[name].maxIntensity, expected, name)
+            assert.ok(store.eqMessage[name].maxIntensityText.endsWith(expected))
+        }
+    }
+    store.setEqMessage('mockEew', { useShindo: true, maxIntensity: '5-', maxIntensityText: '推定最大震度: 5-' }, 'mock')
+    assert.equal(store.eqMessage.mockEew.maxIntensity, '5弱')
+    assert.equal(store.eqMessage.mockEew.maxIntensityText, '推定最大震度: 5弱')
+    for(const maxIntensity of [null, undefined, '']) {
+        store.setEqMessage('mockEew', { useShindo: true, maxIntensity }, 'mock')
+        assert.equal(store.eqMessage.mockEew.maxIntensity, '不明')
+        assert.equal(store.eqMessage.mockEew.maxIntensityText, '推定最大震度: 不明')
+    }
+    store.setEqMessage('mockEew', { useShindo: false, maxIntensity: '5', maxIntensityText: '预估最大烈度: 5' }, 'mock')
+    assert.equal(store.eqMessage.mockEew.maxIntensityText, '预估最大烈度: 5')
 })
 
 test('CENC IR uses ID differences after an empty baseline, ignores title/order changes, and updates history links', () => {

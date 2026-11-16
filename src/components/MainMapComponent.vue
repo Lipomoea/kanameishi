@@ -35,8 +35,8 @@
                                     <div class="location">{{ event.eqMessage.hypocenter }}</div>
                                     <div class="time">{{ event.eqMessage.originTime + ` (${formatTimeZone(event.eqMessage.timeZone)})` }}</div>
                                     <div class="bottom">
-                                        <div class="magnitude">{{ event.eqMessage.isAssumption?'仮定震源要素':'M' + event.eqMessage.magnitude.toFixed(1) }}</div>
-                                        <div class="depth">{{ event.eqMessage.isAssumption?'':event.eqMessage.depthText }}</div>
+                                        <div class="magnitude">{{ event.eqMessage.assumptionText || 'M' + event.eqMessage.magnitude.toFixed(1) }}</div>
+                                        <div class="depth">{{ event.eqMessage.assumptionText?'':event.eqMessage.depthText }}</div>
                                         <div class="type" v-if="settingsStore.advancedSettings.displayApiType">{{ event.eqMessage.source === 'gqEew' ? gqQualityLabels[event.eqMessage.quality] ?? '?' : getProviderLabel(event.eqMessage) }}</div>
                                     </div>
                                 </div>

@@ -32,6 +32,7 @@ export const defaultEqMessage = {
     reportTime: '',
     reviewType: '',
     isAssumption: false,
+    assumptionText: '',
     isWarn: false,
     isFinal: false,
     isCanceled: false,
@@ -71,11 +72,12 @@ export const seisNetSources = ['palertNet', 'tremNet', 'niedNet', 'kmaNet']
 const wolfx2Source = Object.fromEntries(Object.entries(wolfxSourceTypes).map(([source, type]) => [type, source]))
 const lipo2Source = Object.fromEntries(Object.entries(lipoSourceTypes).map(([source, type]) => [type, source]))
 
-// Provider IDs are stable parser keys; only EEW uses these numbers as priorities (lower wins).
+// Provider display and EEW priorities (lower wins); parsing uses the original provider.
 export const sourceTypes = {
     jmaEew: {
         0: 'wolfx',
-        1: 'lipo'
+        1: 'lipo_1',
+        2: 'lipo_0'
     },
     cwaEew: {
         0: 'wolfx'
@@ -346,7 +348,8 @@ export const useStatusStore = defineStore('statusStore', {
         },
         setEqMessage(source, data, provider) {
             try{
-                const type = getSourceType(source, provider)
+                const priorityProvider = source === 'jmaEew' && provider === 'lipo' ? `lipo_${data.source}` : provider
+                const type = getSourceType(source, priorityProvider)
                 if(type === undefined || !Object.hasOwn(this.eqMessage, source)) {
                     console.warn('Unknown earthquake source/provider:', source, provider)
                     return
@@ -376,11 +379,14 @@ export const useStatusStore = defineStore('statusStore', {
                         switch(provider) {
                             case 'wolfx': {
                                 const trainingText = data.isTraining ? '訓練·' : ''
+                                const isLevel = data.CodeType === '最大予測震度のみの緊急地震速報'
+                                const isPlum = data.isAssumption === true
                                 eqMessage.id = data.EventID
                                 eqMessage.isCanceled = data.isCancel
                                 eqMessage.reportNum = data.Serial
                                 eqMessage.reportTime = data.AnnouncedTime.replace(/\//g, '-')
-                                eqMessage.isAssumption = data.isAssumption
+                                eqMessage.isAssumption = isLevel || isPlum
+                                eqMessage.assumptionText = isLevel ? '大きな加速度を検知' : isPlum ? '仮定震源要素' : ''
                                 eqMessage.isWarn = data.isWarn
                                 eqMessage.isFinal = data.isFinal
                                 eqMessage.title = trainingText + data.Title
@@ -392,7 +398,7 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.originTimeText = '発震時刻: ' + data.OriginTime.replace(/\//g, '-') + ' (JST)'
                                 eqMessage.magnitude = data.Magnitude
                                 eqMessage.magnitudeText = 'マグニチュード: ' + data.Magnitude.toFixed(1)
-                                eqMessage.maxIntensity = data.MaxIntensity
+                                eqMessage.maxIntensity = formatShindo(data.MaxIntensity, false)
                                 if(data.isCancel){
                                     eqMessage.reportNumText = 'キャンセル報'
                                     eqMessage.titleText = trainingText + '緊急地震速報（取消）'
@@ -404,12 +410,13 @@ export const useStatusStore = defineStore('statusStore', {
                                     eqMessage.reportNumText = '第' + data.Serial + '報' + (data.isFinal ? '（最終）' : '')
                                     eqMessage.titleText = trainingText + data.Title
                                     eqMessage.hypocenter = trainingText + data.Hypocenter
-                                    eqMessage.maxIntensityText = '推定最大震度: ' + data.MaxIntensity
+                                    eqMessage.maxIntensityText = '推定最大震度: ' + eqMessage.maxIntensity
                                     eqMessage.warnArea = JSON.stringify(data.WarnArea.map(item=>{
+                                        const intensity = formatShindo(item.Shindo1, false)
                                         return {
                                             name: item.Chiiki,
-                                            intensity: item.Shindo1,
-                                            className: setClassName(item.Shindo1, true)
+                                            intensity,
+                                            className: setClassName(intensity, true)
                                         }
                                     }))
                                 }
@@ -419,11 +426,14 @@ export const useStatusStore = defineStore('statusStore', {
                             case 'lipo': {
                                 const infoTypeName = data.isWarn === true ? '警報' : data.isWarn === false ? '予報' : '不明'
                                 const trainingText = data.isTraining ? '訓練·' : ''
+                                const isLevel = !data.magnitude
+                                const isPlum = data.magnitude === 1 && data.depth === 10
                                 eqMessage.id = data.eventId
                                 eqMessage.isCanceled = Boolean(data.isCanceled)
                                 eqMessage.reportNum = data.reportNum
                                 eqMessage.reportTime = data.reportTime || data.originTime || ''
-                                eqMessage.isAssumption = false
+                                eqMessage.isAssumption = isLevel || isPlum
+                                eqMessage.assumptionText = isLevel ? '大きな加速度を検知' : isPlum ? '仮定震源要素' : ''
                                 eqMessage.isWarn = infoTypeName == '警報'
                                 eqMessage.isFinal = Boolean(data.isFinal)
                                 eqMessage.title = trainingText + `緊急地震速報（${infoTypeName}）`
@@ -435,7 +445,7 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.originTimeText = '発震時刻: ' + eqMessage.originTime + ' (JST)'
                                 eqMessage.magnitude = data.magnitude ?? -1
                                 eqMessage.magnitudeText = 'マグニチュード: ' + formatLipoNumber(data.magnitude, 1)
-                                eqMessage.maxIntensity = data.maxIntensity || '不明'
+                                eqMessage.maxIntensity = formatShindo(data.maxIntensity, false)
                                 if(data.isCanceled){
                                     eqMessage.reportNumText = 'キャンセル報'
                                     eqMessage.titleText = trainingText + '緊急地震速報（取消）'
@@ -449,7 +459,17 @@ export const useStatusStore = defineStore('statusStore', {
                                     eqMessage.maxIntensityText = '推定最大震度: ' + eqMessage.maxIntensity
                                 }
                                 eqMessage.hypocenterText = '震源地: ' + eqMessage.hypocenter
-                                eqMessage.warnArea = '[]'
+                                eqMessage.warnArea = JSON.stringify(data.source === 1 && !eqMessage.isCanceled && Array.isArray(data.warnArea)
+                                    ? data.warnArea.map(item => {
+                                        const upperIntensity = item.intensity?.to
+                                        const intensity = formatShindo(typeof upperIntensity === 'string' && upperIntensity !== 'over' ? upperIntensity : '不明', false)
+                                        return {
+                                            name: item.name,
+                                            intensity,
+                                            className: setClassName(intensity, true)
+                                        }
+                                    })
+                                    : [])
                                 break
                             }
                         }
@@ -477,7 +497,7 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.originTimeText = '時間: ' + data.OriginTime
                                 eqMessage.magnitude = data.Magnitude
                                 eqMessage.magnitudeText = '規模: ' + data.Magnitude.toFixed(1)
-                                eqMessage.maxIntensity = data.MaxIntensity || '不明'
+                                eqMessage.maxIntensity = formatShindo(data.MaxIntensity, false)
                                 eqMessage.maxIntensityText = '預估最大震度: ' + eqMessage.maxIntensity
                                 eqMessage.isWarn = getShindoRank(eqMessage.maxIntensity) >= 5
                                 break
@@ -621,6 +641,11 @@ export const useStatusStore = defineStore('statusStore', {
                     }
                     case 'mockEew': {
                         Object.assign(eqMessage, data)
+                        eqMessage.assumptionText = eqMessage.isAssumption ? '假定震源要素' : ''
+                        if(eqMessage.useShindo) {
+                            eqMessage.maxIntensity = formatShindo(eqMessage.maxIntensity, false)
+                            eqMessage.maxIntensityText = '推定最大震度: ' + eqMessage.maxIntensity
+                        }
                         break
                     }
                     case 'jmaEqlist':{
@@ -747,7 +772,7 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.originTimeText = '時間: ' + eqMessage.originTime
                                 eqMessage.magnitude = data.magnitude ?? -1
                                 eqMessage.magnitudeText = '規模: ' + formatLipoNumber(data.magnitude, 1)
-                                eqMessage.maxIntensity = data.maxIntensity?.replace('級', '') || '不明'
+                                eqMessage.maxIntensity = formatShindo(data.maxIntensity, false)
                                 eqMessage.maxIntensityText = '最大震度: ' + eqMessage.maxIntensity
                                 break
                             }
@@ -990,6 +1015,7 @@ export const useStatusStore = defineStore('statusStore', {
                         const item = data[keys[i]]
                         const id = item.EventID
                         const originTime = convertCompactTimeString(id) || item.time_full.replace(/\//g, '-')
+                        const maxIntensity = formatShindo(item.shindo, false)
                         list[i] = {
                             source: 'JMA',
                             id,
@@ -1001,8 +1027,8 @@ export const useStatusStore = defineStore('statusStore', {
                             hypocenter: item.location,
                             depth: Number(item.depth.replace('km', '')),
                             magnitude: Number(item.magnitude) || 0,
-                            maxIntensity: item.shindo,
-                            className: setClassName(item.shindo, true),
+                            maxIntensity,
+                            className: setClassName(maxIntensity, true),
                             url: `https://typhoon.yahoo.co.jp/weather/jp/earthquake/${id}.html`
                         }
                         break
@@ -1012,7 +1038,7 @@ export const useStatusStore = defineStore('statusStore', {
                         const locStart = placeName.indexOf('(位於')
                         const locEnd = placeName.indexOf(')')
                         const hypocenter = locStart == -1 || locEnd == -1 || locStart + 3 >= locEnd ? placeName : placeName.slice(locStart + 3, locEnd)
-                        const maxIntensity = formatShindo(data[i].maxIntensity)
+                        const maxIntensity = formatShindo(data[i].maxIntensity, false)
                         list[i] = {
                             source: 'CWA',
                             id: data[i].eventId,

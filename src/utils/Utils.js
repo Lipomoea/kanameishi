@@ -36,7 +36,11 @@ export const calcDistanceKm = ([lat1, lng1], [lat2, lng2]) => {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.sin(dLng / 2) ** 2;
   const boundedA = Math.min(Math.max(a, 0), 1);
-  return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(boundedA), Math.sqrt(1 - boundedA));
+  return (
+    2 *
+    EARTH_RADIUS_KM *
+    Math.atan2(Math.sqrt(boundedA), Math.sqrt(1 - boundedA))
+  );
 };
 
 export const calcLngDiff = (lng1, lng2) => {
@@ -603,21 +607,23 @@ export const formatCsis = value => {
     else return value;
   }
 };
-export const formatShindo = (intensity, useSymbol = true) =>
-  intensity
-    ? useSymbol
-      ? intensity
-          .replace("強", "+")
-          .replace("弱", "-")
-          .replace("不明", "?")
-          .replace("級", "")
-      : intensity.replace("+", "強").replace("-", "弱").replace("?", "不明")
-    : undefined;
+export const formatShindo = (intensity, useSymbol = true) => {
+  const value = intensity || "不明";
+  return useSymbol
+    ? value
+        .replace("強", "+")
+        .replace("弱", "-")
+        .replace("不明", "?")
+        .replace("級", "")
+    : value
+        .replace("+", "強")
+        .replace("-", "弱")
+        .replace("?", "不明")
+        .replace("級", "");
+};
 export const getShindoRank = value => {
   if (typeof value !== "string") return -1;
-  return shindoScale.indexOf(
-    formatShindo(value.trim().replaceAll("强", "強")),
-  );
+  return shindoScale.indexOf(formatShindo(value.trim().replaceAll("强", "強")));
 };
 export const calcMaxJmaShindoLevel = (
   mj,
@@ -648,7 +654,9 @@ export const exactRound = (input, digit) => {
   const shifted = Number(`${coefficient}e${Number(exponent) + digit}`);
   // Overflow while shifting means the requested decimal places already exceed the input's precision.
   if (!Number.isFinite(shifted)) return input;
-  const [rounded, roundedExponent = "0"] = String(Math.round(shifted)).split("e");
+  const [rounded, roundedExponent = "0"] = String(Math.round(shifted)).split(
+    "e",
+  );
   return Number(`${rounded}e${Number(roundedExponent) - digit}`);
 };
 export const compareFloat = (a, b, digit = 10) => {

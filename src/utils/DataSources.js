@@ -7,6 +7,8 @@ export const dataSourceCategories = [
 export const dataSourceProviders = {
     wolfx: 'Wolfx',
     lipo: 'Lipo',
+    lipo_0: 'Lipo0',
+    lipo_1: 'Lipo1',
     p2pquake: 'P2PQ',
     globalquake: 'GQ',
     usgs: 'USGS',
