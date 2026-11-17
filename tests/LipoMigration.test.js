@@ -226,10 +226,10 @@ test('Lipo applies source-specific zero fallbacks while preserving report depths
 
 test('CEA and ICL estimate missing intensity while KMA leaves it empty and keeps supplied values', () => {
     const { store, intensityCalculations } = setup()
-    for(const missing of [null, undefined]) {
+    for(const [index, missing] of [null, undefined].entries()) {
         intensityCalculations.length = 0
         for(const source of ['ceaEew', 'iclEew', 'kmaEew', 'kmaEqlist']) {
-            store.setEqMessage(source, event({ depth: missing, maxIntensity: missing }), 'lipo')
+            store.setEqMessage(source, event({ reportNum: index + 1, depth: missing, maxIntensity: missing }), 'lipo')
             assert.equal(store.eqMessage[source].depth, 10, source)
             assert.equal(store.eqMessage[source].maxIntensity, source.startsWith('kma') ? '' : '3', source)
             assert.equal(store.eqMessage[source].isWarn, false, source)
@@ -241,12 +241,95 @@ test('CEA and ICL estimate missing intensity while KMA leaves it empty and keeps
     }
     intensityCalculations.length = 0
     for(const source of ['ceaEew', 'iclEew', 'kmaEew', 'kmaEqlist']) {
-        store.setEqMessage(source, event({ depth: 25, maxIntensity: 7 }), 'lipo')
+        store.setEqMessage(source, event({ reportNum: 3, depth: 25, maxIntensity: 7 }), 'lipo')
         assert.equal(store.eqMessage[source].depth, 25, source)
         assert.equal(store.eqMessage[source].maxIntensity, '7', source)
         if(source.endsWith('Eew')) assert.equal(store.eqMessage[source].isWarn, true, source)
     }
     assert.deepEqual(intensityCalculations, [])
+})
+
+test('Lipo KMA maps revisions to provider types and supplies Korean text for missing epicenters', () => {
+    for(const [rev, epicenter] of [
+        [0, null], [0, undefined], [0, ''], [undefined, null], [null, null],
+        [0, '경북 상주시'], [1, '경북 상주시 북서쪽 22km 지역'],
+    ]) {
+        const { store, getProviderLabel } = setup()
+        store.receiveLipoMessage({ type: 'kma_eew', data: event({ rev, epicenter }) })
+        const message = store.eqMessage.kmaEew
+        assert.equal(message.type, rev ?? 0)
+        assert.equal(message.source, 'kmaEew')
+        assert.equal(Object.hasOwn(message, 'rev'), false)
+        assert.equal(getProviderLabel(message), 'Lipo')
+        assert.equal(message.hypocenter, epicenter || '미상 지명')
+        assert.equal(message.hypocenterText, '위치: ' + (epicenter || '미상 지명'))
+        assert.equal(message.reportNumText, '제2보')
+        assert.equal(message.reportTime, event().reportTime)
+    }
+})
+
+test('Lipo KMA displays the last received version even when its report or revision is older', () => {
+    const { store } = setup()
+    const deliver = data => store.receiveLipoMessage({ type: 'kma_eew', data })
+    const initial = event({ rev: 0, epicenter: null })
+    deliver(initial)
+    const original = { ...store.eqMessage.kmaEew }
+    const epicenter = '경북 상주시 북서쪽 22km 지역'
+    deliver({ ...initial, rev: 1, epicenter })
+    const confirmed = { ...original, type: 1, hypocenter: epicenter, hypocenterText: '위치: ' + epicenter }
+    assert.deepEqual(store.eqMessage.kmaEew, confirmed, 'Confirmation changes only the name and revision')
+
+    for(const fields of [{ rev: 0 }, { rev: 1 }, { rev: undefined }, { reportNum: 1, rev: 1 }]) {
+        deliver({ ...initial, rev: 1, epicenter })
+        const incoming = { ...initial, ...fields, epicenter: 'last received name', reportTime: '2026-11-04 01:02:00' }
+        deliver(incoming)
+        assert.equal(store.eqMessage.kmaEew.reportNum, incoming.reportNum)
+        assert.equal(store.eqMessage.kmaEew.type, incoming.rev ?? 0)
+        assert.equal(store.eqMessage.kmaEew.reportTime, incoming.reportTime)
+        assert.equal(store.eqMessage.kmaEew.hypocenter, incoming.epicenter)
+        assert.equal(store.eqMessage.kmaEew.hypocenterText, '위치: ' + incoming.epicenter)
+    }
+    deliver({ ...initial, rev: 1, epicenter })
+    deliver(null)
+    assert.deepEqual(store.eqMessage.kmaEew, confirmed, 'An empty snapshot does not clear the event')
+
+    deliver({ ...initial, reportNum: 3, magnitude: 4.5 })
+    assert.equal(store.eqMessage.kmaEew.reportNum, 3)
+    assert.equal(store.eqMessage.kmaEew.type, 0)
+    assert.equal(store.eqMessage.kmaEew.magnitude, 4.5)
+    assert.equal(store.eqMessage.kmaEew.hypocenter, '미상 지명')
+    deliver({ ...initial, rev: 1, epicenter })
+    assert.deepEqual(store.eqMessage.kmaEew, confirmed, 'The store follows reception order, including a lower report number')
+
+    deliver({ ...initial, reportNum: 3, rev: 1, epicenter })
+    deliver({ ...initial, reportNum: 4, rev: undefined })
+    assert.equal(store.eqMessage.kmaEew.type, 0, 'A missing revision must not inherit the preceding report type')
+    deliver({ ...initial, reportNum: 4, rev: 1, epicenter })
+    deliver({ ...initial, eventId: 'next-event', reportNum: 1 })
+    assert.equal(store.eqMessage.kmaEew.id, 'next-event')
+    assert.equal(store.eqMessage.kmaEew.reportNum, 1)
+    assert.equal(store.eqMessage.kmaEew.type, 0)
+    assert.equal(store.eqMessage.kmaEew.hypocenter, '미상 지명')
+})
+
+test('Lipo KMA accepts a confirmation even when the place name does not change', () => {
+    const { store } = setup()
+    const data = event({ rev: 0, epicenter: '경북 상주시' })
+    store.receiveLipoMessage({ type: 'kma_eew', data })
+    const original = { ...store.eqMessage.kmaEew }
+    store.receiveLipoMessage({ type: 'kma_eew', data: { ...data, rev: 1 } })
+    assert.deepEqual(store.eqMessage.kmaEew, { ...original, type: 1 })
+})
+
+test('Lipo KMA rejects unknown revision identities without changing the displayed event', () => {
+    const { store, warnings } = setup()
+    store.receiveLipoMessage({ type: 'kma_eew', data: event({ rev: 0 }) })
+    const original = { ...store.eqMessage.kmaEew }
+    for(const rev of [-1, 2, 0.5]) {
+        store.receiveLipoMessage({ type: 'kma_eew', data: event({ reportNum: 3, rev, epicenter: 'unknown version' }) })
+        assert.deepEqual(store.eqMessage.kmaEew, original)
+    }
+    assert.equal(warnings.length, 3)
 })
 
 test('CWA reports use the supplied report time or the unchanged origin time', () => {
@@ -261,7 +344,7 @@ test('Lipo JMA translates cancellation and final/training flags with its upstrea
     const { store } = setup()
     store.setEqMessage('jmaEew', event({ maxIntensity: '5弱', isWarn: true, isFinal: true, isTraining: true, isCanceled: true }), 'lipo')
     const message = store.eqMessage.jmaEew
-    assert.equal(message.type, 2)
+    assert.equal(message.type, 0)
     assert.equal(message.isCanceled, true)
     assert.equal(message.isFinal, true)
     assert.equal(message.reportNum, 2)
@@ -353,7 +436,7 @@ test('Lipo JMA upstream priority preserves provider labels and replaces regional
         store.setEqMessage('jmaEew', event({ source: 1, warnArea }), 'lipo')
         store.setEqMessage('jmaEew', event(fields), 'lipo')
         assert.equal(message.warnArea, '[]')
-        assert.equal(message.type, fields.source === 1 ? 1 : 2)
+        assert.equal(message.type, fields.source === 1 ? 1 : 0)
         assert.equal(getProviderLabel(message), fields.source === 1 ? 'Lipo1' : 'Lipo0')
     }
     const previous = { ...message }
@@ -366,6 +449,15 @@ test('Lipo JMA upstream priority preserves provider labels and replaces regional
 
 test('provider routing follows sourceTypes after reordering, including single-provider sources', () => {
     const { store, sourceTypes, getProviderLabel } = setup()
+    const wolfx = {
+        EventID: 'wolfx-event', Serial: 3, AnnouncedTime: '2026/11/04 01:02:10',
+        OriginTime: '2026/11/04 01:02:03', Title: 'test', Hypocenter: 'Wolfx event',
+        Latitude: 35, Longitude: 140, Depth: 10, Magnitude: 4.2, MaxIntensity: '4',
+        WarnArea: [], isCancel: false,
+    }
+    store.setEqMessage('jmaEew', wolfx, 'wolfx')
+    assert.equal(store.eqMessage.jmaEew.type, 2)
+    assert.equal(getProviderLabel(store.eqMessage.jmaEew), 'Wolfx')
     sourceTypes.jmaEew = { 0: 'lipo_0', 1: 'wolfx', 2: 'lipo_1' }
     store.receiveLipoMessage({ type: 'jma_eew', data: event({ maxIntensity: '4' }) })
     assert.equal(store.eqMessage.jmaEew.type, 0)
@@ -374,12 +466,7 @@ test('provider routing follows sourceTypes after reordering, including single-pr
     store.receiveLipoMessage({ type: 'jma_eew', data: event({ source: 1, maxIntensity: '4' }) })
     assert.equal(store.eqMessage.jmaEew.type, 2)
     assert.equal(getProviderLabel(store.eqMessage.jmaEew), 'Lipo1')
-    store.setEqMessage('jmaEew', {
-        EventID: 'wolfx-event', Serial: 3, AnnouncedTime: '2026/11/04 01:02:10',
-        OriginTime: '2026/11/04 01:02:03', Title: 'test', Hypocenter: 'Wolfx event',
-        Latitude: 35, Longitude: 140, Depth: 10, Magnitude: 4.2, MaxIntensity: '4',
-        WarnArea: [], isCancel: false,
-    }, 'wolfx')
+    store.setEqMessage('jmaEew', wolfx, 'wolfx')
     assert.equal(store.eqMessage.jmaEew.type, 1)
     assert.equal(store.eqMessage.jmaEew.id, 'wolfx-event')
     assert.equal(store.eqMessage.jmaEew.reportNum, 3)
@@ -387,17 +474,17 @@ test('provider routing follows sourceTypes after reordering, including single-pr
 
     // The same provider has an independent rank for each source.
     store.setEqMessage('ceaEew', event(), 'lipo')
-    assert.equal(store.eqMessage.ceaEew.type, 0)
-    sourceTypes.ceaEew = { 0: 'wolfx', 1: 'lipo' }
-    store.setEqMessage('ceaEew', event({ depth: 0 }), 'lipo')
     assert.equal(store.eqMessage.ceaEew.type, 1)
+    sourceTypes.ceaEew = { 0: 'lipo', 1: 'wolfx' }
+    store.setEqMessage('ceaEew', event({ depth: 0 }), 'lipo')
+    assert.equal(store.eqMessage.ceaEew.type, 0)
     assert.equal(store.eqMessage.ceaEew.depth, 0)
     store.setEqMessage('ceaEew', {
         EventID: 'cea-wolfx', ReportNum: 3, ReportTime: event().reportTime,
         OriginTime: event().originTime, HypoCenter: 'CEA event', Latitude: 30,
         Longitude: 105, Depth: 8, Magnitude: 5, MaxIntensity: 4,
     }, 'wolfx')
-    assert.equal(store.eqMessage.ceaEew.type, 0)
+    assert.equal(store.eqMessage.ceaEew.type, 1)
     assert.equal(store.eqMessage.ceaEew.id, 'cea-wolfx')
     assert.equal(store.eqMessage.ceaEew.depth, 8)
 
@@ -408,7 +495,15 @@ test('provider routing follows sourceTypes after reordering, including single-pr
     }, 'wolfx')
     assert.equal(store.eqMessage.cwaEew.type, 2)
     assert.equal(store.eqMessage.cwaEew.id, 'cwa-event')
-    for(const source of ['iclEew', 'kmaEew', 'cwaEqlist', 'kmaEqlist']) {
+    sourceTypes.kmaEew = { 4: 'lipo_rev0', 5: 'lipo_rev1' }
+    store.setEqMessage('kmaEew', event({ rev: 1, epicenter: '경북 상주시' }), 'lipo')
+    assert.equal(store.eqMessage.kmaEew.type, 5)
+    assert.equal(getProviderLabel(store.eqMessage.kmaEew), 'Lipo')
+    store.setEqMessage('kmaEew', event({ rev: 0, epicenter: null }), 'lipo')
+    assert.equal(store.eqMessage.kmaEew.type, 4)
+    assert.equal(store.eqMessage.kmaEew.hypocenter, '미상 지명')
+    assert.equal(getProviderLabel(store.eqMessage.kmaEew), 'Lipo')
+    for(const source of ['iclEew', 'cwaEqlist', 'kmaEqlist']) {
         sourceTypes[source] = { 0: 'lipo' }
         store.setEqMessage(source, event({ maxIntensity: undefined, epicenter: undefined }), 'lipo')
         assert.equal(store.eqMessage[source].type, 0, source)

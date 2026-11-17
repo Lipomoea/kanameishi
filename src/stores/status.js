@@ -72,25 +72,26 @@ export const seisNetSources = ['palertNet', 'tremNet', 'niedNet', 'kmaNet']
 const wolfx2Source = Object.fromEntries(Object.entries(wolfxSourceTypes).map(([source, type]) => [type, source]))
 const lipo2Source = Object.fromEntries(Object.entries(lipoSourceTypes).map(([source, type]) => [type, source]))
 
-// Provider display and EEW priorities (lower wins); parsing uses the original provider.
+// Provider display and EEW priorities (higher wins); parsing uses the original provider.
 export const sourceTypes = {
     jmaEew: {
-        0: 'wolfx',
+        0: 'lipo_0',
         1: 'lipo_1',
-        2: 'lipo_0'
+        2: 'wolfx'
     },
     cwaEew: {
         0: 'wolfx'
     },
     ceaEew: {
-        0: 'lipo',
-        1: 'wolfx'
+        0: 'wolfx',
+        1: 'lipo'
     },
     iclEew: {
         1: 'lipo'
     },
     kmaEew: {
-        1: 'lipo'
+        0: 'lipo_rev0',
+        1: 'lipo_rev1'
     },
     gqEew: {
         0: 'globalquake'
@@ -348,7 +349,11 @@ export const useStatusStore = defineStore('statusStore', {
         },
         setEqMessage(source, data, provider) {
             try{
-                const priorityProvider = source === 'jmaEew' && provider === 'lipo' ? `lipo_${data.source}` : provider
+                let priorityProvider = provider
+                if(provider === 'lipo') {
+                    if(source === 'jmaEew') priorityProvider = `lipo_${data.source}`
+                    else if(source === 'kmaEew') priorityProvider = `lipo_rev${data.rev ?? 0}`
+                }
                 const type = getSourceType(source, priorityProvider)
                 if(type === undefined || !Object.hasOwn(this.eqMessage, source)) {
                     console.warn('Unknown earthquake source/provider:', source, provider)
@@ -586,8 +591,8 @@ export const useStatusStore = defineStore('statusStore', {
                         eqMessage.reportNumText = '제' + eqMessage.reportNum + '보'
                         eqMessage.reportTime = data.reportTime
                         eqMessage.titleText = '기상청 지진 조기 경보'
-                        eqMessage.hypocenter = data.epicenter
-                        eqMessage.hypocenterText = '위치: ' + data.epicenter
+                        eqMessage.hypocenter = data.epicenter || '미상 지명'
+                        eqMessage.hypocenterText = '위치: ' + eqMessage.hypocenter
                         eqMessage.lat = data.latitude
                         eqMessage.lng = data.longitude
                         eqMessage.depth = data.depth || 10

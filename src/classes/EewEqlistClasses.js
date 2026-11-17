@@ -376,10 +376,9 @@ export class EewEvent {
         this.clearReachBar()
     }
     update(eqMessage, time, isFirst = false){
-        const isAddition = eqMessage.source !== 'gqEew'
-            && eqMessage.reportNum == this.eqMessage.reportNum
+        const isAddition = eqMessage.reportNum == this.eqMessage.reportNum
             && eqMessage.isCanceled == this.eqMessage.isCanceled
-            && eqMessage.type < this.eqMessage.type
+            && eqMessage.type > this.eqMessage.type
         if(isFirst || eqMessage.reportNum > this.eqMessage.reportNum || 
         eqMessage.reportNum == this.eqMessage.reportNum && eqMessage.isCanceled > this.eqMessage.isCanceled || 
         isAddition) {

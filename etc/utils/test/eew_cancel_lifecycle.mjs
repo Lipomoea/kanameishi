@@ -62,7 +62,7 @@ const createHarness = (source = 'jmaEew') => {
     const stop = new Function(...Object.keys(watcherDependencies),
         `let timer;\nreturn ${watcherSource}`)(...Object.values(watcherDependencies))
     return {
-        activeEewList, sounds, notifications, stop,
+        activeEewList, sounds, notifications, settingsStore, stop,
         get creations() { return creations },
         get focuses() { return focuses },
         async advance(target) {
@@ -120,30 +120,30 @@ console.log('PASS same-report cancellation priority and no repeated activation a
 
 {
     const h = createHarness()
-    await h.deliver({ type: 2, isAssumption: true, assumptionText: '大きな加速度を検知' })
+    await h.deliver({ type: 0, isAssumption: true, assumptionText: '大きな加速度を検知' })
     const active = h.activeEewList[0]
     const warnArea = JSON.stringify([{ name: 'test area', intensity: '5弱', className: 'orange' }])
     await h.deliver({ type: 1, isAssumption: true, assumptionText: '仮定震源要素', warnArea })
     assert.equal(active.eqMessage.type, 1)
     assert.equal(active.eqMessage.assumptionText, '仮定震源要素')
     assert.equal(active.eqMessage.warnArea, warnArea)
-    await h.deliver({ type: 2 })
+    await h.deliver({ type: 0 })
     assert.equal(active.eqMessage.type, 1, 'Lipo source 0 cannot replace source 1 at the same report')
     assert.equal(active.eqMessage.warnArea, warnArea)
-    await h.deliver({ type: 0, warnArea })
-    assert.equal(active.eqMessage.type, 0)
+    await h.deliver({ type: 2, warnArea })
+    assert.equal(active.eqMessage.type, 2)
     assert.equal(active.eqMessage.isAssumption, false)
     assert.equal(active.eqMessage.assumptionText, '')
-    for(const type of [1, 2]) await h.deliver({ type, isAssumption: true, assumptionText: '大きな加速度を検知' })
-    assert.equal(active.eqMessage.type, 0, 'Neither Lipo upstream can replace Wolfx at the same report')
+    for(const type of [0, 1]) await h.deliver({ type, isAssumption: true, assumptionText: '大きな加速度を検知' })
+    assert.equal(active.eqMessage.type, 2, 'Neither Lipo upstream can replace Wolfx at the same report')
     assert.equal(active.eqMessage.assumptionText, '')
     assert.equal(active.eqMessage.warnArea, warnArea)
     assert.deepEqual(h.sounds, ['issue'])
     assert.equal(h.notifications.length, 1)
     assert.equal(h.focuses, 1)
     assert.equal(h.creations, 1)
-    await h.deliver({ type: 2, reportNum: 4 })
-    assert.equal(active.eqMessage.type, 2, 'A higher report from Lipo source 0 replaces Wolfx')
+    await h.deliver({ type: 0, reportNum: 4 })
+    assert.equal(active.eqMessage.type, 0, 'A higher report from Lipo source 0 replaces Wolfx')
     assert.equal(active.eqMessage.warnArea, '[]', 'A new report cannot retain old regional forecasts')
     assert.deepEqual(h.sounds, ['issue', 'update'])
     assert.equal(h.notifications.length, 2)
@@ -152,18 +152,152 @@ console.log('PASS same-report cancellation priority and no repeated activation a
 console.log('PASS Lipo upstream and Wolfx supplementation refreshes fields silently; newer reports replace forecasts')
 
 {
-    const h = createHarness()
-    await h.deliver({ type: 0 })
-    await h.advance(1000)
-    await h.deliver({ type: 2, isCanceled: true, reportStamp: 1000 })
+    const h = createHarness('ceaEew')
+    await h.deliver({ type: 0, hypocenter: 'Wolfx' })
     const active = h.activeEewList[0]
-    assert.equal(active.eqMessage.type, 2, 'Cancellation wins even from a lower-priority provider')
-    for(const type of [1, 0]) {
+    await h.deliver({ type: 1, hypocenter: 'Lipo' })
+    assert.equal(active.eqMessage.hypocenter, 'Lipo')
+    await h.deliver({ type: 0, hypocenter: 'Wolfx' })
+    assert.equal(active.eqMessage.hypocenter, 'Lipo', 'CEA prefers the higher-ranked Lipo provider at the same report')
+    assert.deepEqual(h.sounds, ['issue'])
+    assert.equal(h.notifications.length, 1)
+    await h.deliver({ type: 0, reportNum: 4, hypocenter: 'Wolfx' })
+    assert.equal(active.eqMessage.hypocenter, 'Wolfx')
+    assert.deepEqual(h.sounds, ['issue', 'update'])
+    h.stop()
+}
+console.log('PASS CEA provider upgrades remain silent and report number outranks provider priority')
+
+for(const initialName of ['미상 지명', '경북 상주시', '경북 상주시 북서쪽 22km 지역']) {
+    const h = createHarness('kmaEew')
+    await h.deliver({ type: 0, hypocenter: initialName, hypocenterText: '위치: ' + initialName })
+    const active = h.activeEewList[0]
+    const original = { ...active.eqMessage }
+    const hypocenter = '경북 상주시 북서쪽 22km 지역'
+    await h.advance(30000)
+    await h.deliver({ type: 1, hypocenter, hypocenterText: '위치: ' + hypocenter })
+    const confirmed = { ...original, type: 1, hypocenter, hypocenterText: '위치: ' + hypocenter }
+    assert.deepEqual(active.eqMessage, confirmed)
+    for(const type of [0, 1]) {
+        await h.deliver({ type, hypocenter: 'stale name' })
+        assert.deepEqual(active.eqMessage, confirmed, 'Repeated or older revisions cannot replace the confirmed name')
+    }
+    assert.deepEqual(h.sounds, ['issue'])
+    assert.equal(h.notifications.length, 1)
+    assert.equal(h.focuses, 1)
+    assert.equal(h.creations, 1)
+
+    await h.deliver({ type: 0, reportNum: 4, reportStamp: 30000 })
+    assert.equal(active.eqMessage.reportNum, 4)
+    assert.equal(active.eqMessage.type, 0)
+    const nextReport = { ...active.eqMessage }
+    await h.deliver({ type: 1, reportNum: 3, hypocenter })
+    assert.deepEqual(active.eqMessage, nextReport, 'An older confirmed report cannot replace a newer initial report')
+    assert.deepEqual(h.sounds, ['issue', 'update'])
+    assert.equal(h.notifications.length, 2)
+    h.stop()
+}
+console.log('PASS KMA revisions fill, replace or confirm names silently; newer reports still trigger actions')
+
+{
+    const h = createHarness('kmaEew')
+    await h.deliver({ type: 1, hypocenter: '경북 상주시' })
+    assert.equal(h.activeEewList[0].eqMessage.type, 1)
+    assert.deepEqual(h.sounds, ['issue'], 'The first received snapshot is an initial alert even when already confirmed')
+    assert.equal(h.notifications.length, 1)
+    assert.equal(h.focuses, 1)
+    h.stop()
+}
+
+for(const confirmBeforeExpiry of [false, true]) {
+    const h = createHarness('kmaEew')
+    await h.deliver({ type: 0 })
+    await h.advance(60000)
+    if(confirmBeforeExpiry) await h.deliver({ type: 1, hypocenter: '경북 상주시' })
+    await h.advance(179999)
+    assert.equal(h.activeEewList.length, 1)
+    await h.advance(180000)
+    assert.equal(h.activeEewList.length, 0, 'A confirmation keeps the original report expiry')
+    for(const reportStamp of [0, 180000]) {
+        await h.deliver({ type: 1, reportStamp, hypocenter: '경북 상주시' })
+        assert.equal(h.activeEewList.length, 0, 'A same-report confirmation cannot revive an expired event')
+    }
+    assert.equal(h.creations, 1)
+    assert.deepEqual(h.sounds, ['issue'])
+    await h.deliver({ type: 0, reportNum: 4, reportStamp: 180000 })
+    assert.equal(h.creations, 2, 'A fresh higher report can reactivate the event')
+    h.stop()
+}
+
+{
+    const h = createHarness('kmaEew')
+    await h.advance(180001)
+    await h.deliver({ type: 1 })
+    assert.equal(h.creations, 0, 'An expired confirmation snapshot cannot create an initial alert')
+    h.stop()
+}
+
+{
+    const h = createHarness('kmaEew')
+    await h.deliver({ type: 0 })
+    h.activeEewList[0].terminate(true)
+    await h.deliver({ type: 1 })
+    await h.deliver({ type: 0, reportNum: 4 })
+    assert.equal(h.activeEewList.length, 0)
+    assert.equal(h.creations, 1)
+    assert.deepEqual(h.sounds, ['issue'])
+    h.stop()
+}
+console.log('PASS KMA confirmed snapshots respect initial actions, report expiry and manual close')
+
+{
+    const h = createHarness('kmaEew')
+    h.settingsStore.mainSettings.actionMag = 9
+    h.settingsStore.actionWhiteListArr = ['상주시']
+    await h.deliver({ type: 0, hypocenter: '미상 지명' })
+    const active = h.activeEewList[0]
+    assert.equal(active.shouldAction, false)
+    await h.deliver({ type: 1, hypocenter: '경북 상주시' })
+    assert.equal(active.shouldAction, true, 'A confirmed name still updates the whitelist decision')
+    assert.deepEqual(h.sounds, [])
+    assert.equal(h.notifications.length, 0)
+    assert.equal(h.focuses, 0)
+
+    Object.assign(h.settingsStore.mainSettings, { displayCountdown: true, playCountdownSound: true })
+    Object.assign(active, { isValidUserLatLng: true, userDist: 10, pReachTime: 10, sReachTime: 20 })
+    active.handleCountdown(10)
+    assert.deepEqual(h.sounds, ['countdown'], 'Countdown sound retains its separate shouldAction gate')
+    active.isValidUserLatLng = false
+    await h.deliver({ type: 0, reportNum: 4, hypocenter: '미상 지명' })
+    assert.equal(active.shouldAction, true, 'An earlier whitelist match remains effective for the event')
+    assert.deepEqual(h.sounds, ['countdown', 'issue'])
+    assert.equal(h.notifications.length, 1)
+    h.stop()
+}
+console.log('PASS KMA silent confirmations preserve whitelist and countdown behavior')
+
+for(const source of ['jmaEew', 'kmaEew', 'gqEew']) {
+    const h = createHarness(source)
+    await h.deliver({ type: 0, hypocenter: 'original' })
+    await h.deliver({ type: 0, hypocenter: 'changed' })
+    assert.equal(h.activeEewList[0].eqMessage.hypocenter, 'original', 'The same report and type cannot replace event content')
+    assert.deepEqual(h.sounds, ['issue'])
+    h.stop()
+}
+
+{
+    const h = createHarness()
+    await h.deliver({ type: 2 })
+    await h.advance(1000)
+    await h.deliver({ type: 0, isCanceled: true, reportStamp: 1000 })
+    const active = h.activeEewList[0]
+    assert.equal(active.eqMessage.type, 0, 'Cancellation wins even from a lower-priority provider')
+    for(const type of [1, 2]) {
         await h.deliver({ type, isCanceled: true, reportStamp: 1000 })
         assert.equal(active.eqMessage.type, type, 'Cancelled events also accept source upgrades')
     }
     const reportTime = active.eqMessage.reportTime
-    await h.deliver({ type: 0, isCanceled: true, reportStamp: 2000 })
+    await h.deliver({ type: 2, isCanceled: true, reportStamp: 2000 })
     assert.equal(active.eqMessage.reportTime, reportTime, 'A repeated cancellation is not another source upgrade')
     assert.deepEqual(h.sounds, ['issue', 'cancel'])
     assert.equal(h.notifications.length, 2)
@@ -185,7 +319,7 @@ console.log('PASS cancellation synchronizes provider priority and later source u
     assert.equal(h.creations, 2, 'Same-report cancellation outranks the expired normal report')
     assert.equal(h.activeEewList[0].eqMessage.isCanceled, true)
     await h.advance(200002)
-    await h.deliver({ type: 0, isCanceled: true, reportStamp: 200002 })
+    await h.deliver({ type: 2, isCanceled: true, reportStamp: 200002 })
     assert.equal(h.creations, 2, 'Same-report cancellation cannot repeat after cancellation expiry')
     assert.deepEqual(h.sounds, ['issue', 'cancel'])
     h.stop()
@@ -195,13 +329,13 @@ console.log('PASS a cancellation can supersede an expired normal report once at 
 {
     const h = createHarness()
     await h.deliver({ type: 1 })
-    await h.deliver({ type: 0 })
-    assert.equal(h.activeEewList[0].eqMessage.type, 0, 'Active same-status reports retain provider preference')
+    await h.deliver({ type: 2 })
+    assert.equal(h.activeEewList[0].eqMessage.type, 2, 'Active same-status reports retain provider preference')
     assert.deepEqual(h.sounds, ['issue'], 'Provider supplementation does not repeat sound')
     await h.deliver({ type: 1, reportNum: 2, isCanceled: true })
     assert.equal(h.activeEewList[0].eqMessage.isCanceled, false, 'A lower report number does not override a newer report')
     await h.advance(180001)
-    await h.deliver({ type: 0, reportNum: 2, isCanceled: true, reportStamp: 180001 })
+    await h.deliver({ type: 2, reportNum: 2, isCanceled: true, reportStamp: 180001 })
     assert.equal(h.creations, 1, 'Lower report cancellation also stays ignored after expiry')
     await h.deliver({ id: 'another-event', reportNum: 1, reportStamp: 180001 })
     assert.equal(h.creations, 2, 'Different event IDs are independent')
@@ -213,8 +347,8 @@ console.log('PASS report-number priority, active provider supplementation and in
     const h = createHarness('gqEew')
     await h.deliver({ quality: 3 })
     const active = h.activeEewList[0]
-    // GQ has no same-report supplementation, even if quality or the configured type changes.
-    await h.deliver({ quality: 0, type: -1 })
+    // GQ keeps type 0 regardless of quality, so quality changes cannot supplement the same report.
+    await h.deliver({ quality: 0 })
     assert.equal(active.eqMessage.quality, 3)
     assert.equal(active.eqMessage.type, 0)
     assert.equal(h.sounds.length, 1)

@@ -9,6 +9,8 @@ export const dataSourceProviders = {
     lipo: 'Lipo',
     lipo_0: 'Lipo0',
     lipo_1: 'Lipo1',
+    lipo_rev0: 'Lipo',
+    lipo_rev1: 'Lipo',
     p2pquake: 'P2PQ',
     globalquake: 'GQ',
     usgs: 'USGS',
