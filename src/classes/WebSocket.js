@@ -189,8 +189,6 @@ export class LipoApiClient extends JsonWebSocketClient {
         this.autoReconnectOnAuthFail = autoReconnectOnAuthFail
         this.reportRequests = [...new Set(reportRequests)].filter(type => lipoReportRequests.has(type))
         this.availableSources = new Set()
-        this.pendingRequests = new Map()
-        this.pendingListRefreshes = new Set()
     }
     resetPewsState() {
         this.pewsStationCount = 0
@@ -259,7 +257,6 @@ export class LipoApiClient extends JsonWebSocketClient {
         } else if (!this.pews && (type === 'init' || type === 'query_all')) {
             if (!data || typeof data !== 'object' || Array.isArray(data)) return
             this.availableSources = new Set(Object.keys(data))
-            this.pendingRequests.delete(type)
             // Deliver the snapshot (including cenc_ir) before requesting report lists.
             super.handleMessage(message)
             if (type === 'init' && this.shouldConnect && this.authenticated) {
@@ -272,30 +269,18 @@ export class LipoApiClient extends JsonWebSocketClient {
                 )
             }
             return
-        } else {
-            this.pendingRequests.delete(type)
         }
         super.handleMessage(message)
         const reportList = `${type}_list`
-        if (lipoReportRequests.has(reportList)) this.request(reportList, { refresh: true })
-        else if (this.pendingListRefreshes.delete(type)) this.request(type)
+        if (lipoReportRequests.has(reportList)) this.request(reportList)
     }
     requestBatch(types) {
         const requests = types.filter(type => type === 'query_all' || this.availableSources.has(type.replace(/_list$/, '')))
-        // Check pending requests at send time, after the shared transport's stagger delay.
         return this.transport.sendMessages(requests, type => this.request(type))
     }
-    request(type, { refresh = false } = {}) {
+    request(type) {
         if (!this.ready || !this.authenticated || this.pews || !this.shouldConnect) return
         if (type !== 'query_all' && (!this.reportRequests.includes(type) || !this.availableSources.has(type.replace(/_list$/, '')))) return
-        const pendingSince = this.pendingRequests.get(type)
-        if (pendingSince !== undefined && Date.now() - pendingSince < 30000) {
-            // The in-flight snapshot may predate this push; refresh once it arrives.
-            if (refresh) this.pendingListRefreshes.add(type)
-            return
-        }
-        this.pendingListRefreshes.delete(type)
-        this.pendingRequests.set(type, Date.now())
         this.transport.send(JSON.stringify({ type }))
     }
     shouldStop(code) {
@@ -307,8 +292,6 @@ export class LipoApiClient extends JsonWebSocketClient {
         this.ready = false
         this.resetPewsState()
         clearInterval(this.queryTimer)
-        this.pendingRequests.clear()
-        this.pendingListRefreshes.clear()
         if (!this.lastError && event?.reason && (lipoAuthenticationErrors.has(event.reason) || lipoProtocolErrors.has(event.reason))) {
             this.lastError = { code: event.reason, message: event.reason }
             super.handleMessage({ type: 'error', data: this.lastError })

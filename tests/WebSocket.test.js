@@ -302,7 +302,7 @@ test('Lipo echoes authenticated string heartbeat IDs, ignores text pings and inv
     assert.equal(sockets[1].sent.length, 2)
 })
 
-test('Lipo polls all lists and query_all every 30 seconds with stable stagger offsets', async t => {
+test('Lipo polls all lists and query_all every 30 seconds with stable stagger offsets even without responses', async t => {
     const { sockets, advance } = setup(t)
     const requests = ['cenc_report_list', 'cwa_report_list', 'kma_report_list', 'usgs_report_list']
     const client = new LipoApiClient('wss://lipo.test/all', {
@@ -317,12 +317,7 @@ test('Lipo polls all lists and query_all every 30 seconds with stable stagger of
     await advance(6000)
     assert.deepEqual(socket.sent.map(JSON.parse).map(message => message.type), ['auth', ...requests])
     assert.deepEqual(socket.sentAt, [0, 0, 2000, 4000, 6000])
-    requests.forEach(type => socket.receive({ type, data: [] }))
-    for (let round = 1; round <= 3; round++) {
-        await advance(round * 30000 + 8000 - Date.now())
-        requests.forEach(type => socket.receive({ type, data: [] }))
-        if (JSON.parse(socket.sent.at(-1)).type === 'query_all') socket.receive({ type: 'query_all', data: snapshot })
-    }
+    await advance(98000 - Date.now())
     const sent = socket.sent.map((message, index) => ({ type: JSON.parse(message).type, at: socket.sentAt[index] }))
     requests.forEach((type, index) => {
         assert.deepEqual(sent.filter(message => message.type === type).map(message => message.at),
@@ -345,7 +340,6 @@ test('Lipo refreshes the matching list for each report push, but not for snapsho
     socket.receive({ type: 'auth_ok' })
     socket.receive({ type: 'init', data: snapshot })
     await advance(6000)
-    sources.forEach(type => socket.receive({ type: `${type}_list`, data: [] }))
     assert.equal(socket.sent.length, 5, 'The init snapshot only requests the initial lists once')
     socket.receive({ type: 'query_all', data: snapshot })
     assert.equal(socket.sent.length, 5, 'Reports inside a query_all snapshot do not trigger list refreshes')
@@ -388,7 +382,7 @@ test('Lipo push-triggered list refreshes require init, configured lists and visi
     assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'usgs_report_list' })
 })
 
-test('Lipo coalesces pushes during an in-flight list, follows up once, and discards refreshes on disconnect', async t => {
+test('Lipo sends every push refresh immediately without response-triggered follow-ups and stops on disconnect or disposal', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/all', { key: 'test-key', reportRequests: ['cenc_report_list'] })
     t.after(() => client.close())
@@ -400,15 +394,13 @@ test('Lipo coalesces pushes during an in-flight list, follows up once, and disca
     await advance(1000)
     socket.receive({ type: 'cenc_report', data: { eventId: 'first' } })
     socket.receive({ type: 'cenc_report', data: { eventId: 'second' } })
-    assert.equal(socket.sent.length, 2, 'Concurrent pushes do not duplicate an in-flight query')
+    assert.deepEqual(socket.sent.slice(-2).map(JSON.parse), [{ type: 'cenc_report_list' }, { type: 'cenc_report_list' }])
+    assert.deepEqual(socket.sentAt, [0, 0, 1000, 1000], 'Each push queries immediately while previous requests are unanswered')
     socket.receive({ type: 'cenc_report_list', data: [] })
-    assert.equal(socket.sent.length, 3, 'A possibly stale response is followed by one fresh query')
-    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'cenc_report_list' })
-    assert.equal(socket.sentAt.at(-1), 1000)
     socket.receive({ type: 'cenc_report_list', data: [] })
-    assert.equal(socket.sent.length, 3)
+    assert.equal(socket.sent.length, 4, 'List responses do not trigger additional queries')
     await advance(29000)
-    assert.equal(socket.sent.length, 4, 'A push refresh does not reset the periodic polling timer')
+    assert.equal(socket.sent.length, 5, 'A push refresh does not reset the periodic polling timer')
     assert.equal(socket.sentAt.at(-1), 30000)
     socket.receive({ type: 'cenc_report', data: { eventId: 'before-disconnect' } })
     socket.finishClose({ code: 1006, reason: '' })
@@ -420,9 +412,10 @@ test('Lipo coalesces pushes during an in-flight list, follows up once, and disca
     socket.receive({ type: 'cenc_report_list', data: [] })
     await advance(2000)
     assert.deepEqual(sockets[1].sent.map(JSON.parse), [{ type: 'auth', key: 'test-key' }, { type: 'cenc_report_list' }])
-    assert.equal(socket.sent.length, 4)
+    assert.equal(socket.sent.length, 6)
     sockets[1].receive({ type: 'cenc_report', data: { eventId: 'before-disposal' } })
-    sockets[1].receive({ type: 'cenc_report', data: { eventId: 'queued-before-disposal' } })
+    sockets[1].receive({ type: 'cenc_report', data: { eventId: 'also-before-disposal' } })
+    assert.equal(sockets[1].sent.length, 4)
     client.close()
     const before = sockets[1].sent.length
     await advance(60000)
@@ -430,7 +423,7 @@ test('Lipo coalesces pushes during an in-flight list, follows up once, and disca
     assert.equal(sockets[1].sent.length, before)
 })
 
-test('Lipo replaces an unanswered list after timeout without duplicating a queued push refresh', async t => {
+test('Lipo keeps periodic queries and push refreshes independent when all responses are lost', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/all', { key: 'test-key', reportRequests: ['cenc_report_list'] })
     t.after(() => client.close())
@@ -438,23 +431,28 @@ test('Lipo replaces an unanswered list after timeout without duplicating a queue
     socket.open()
     socket.receive({ type: 'auth_ok' })
     socket.receive({ type: 'init', data: { cenc_report: { data: null } } })
-    await advance(1000)
+    await advance(29000)
     socket.receive({ type: 'cenc_report', data: { eventId: 'new' } })
-    await advance(28999)
-    assert.equal(socket.sent.length, 2)
-    await advance(1)
-    assert.deepEqual(socket.sent.map(JSON.parse), [
-        { type: 'auth', key: 'test-key' }, { type: 'cenc_report_list' }, { type: 'cenc_report_list' },
-    ])
-    socket.receive({ type: 'cenc_report_list', data: [] })
-    assert.equal(socket.sent.length, 3, 'The periodic retry already covers the queued refresh')
+    assert.equal(socket.sentAt.at(-1), 29000)
+    assert.equal(socket.sent.length, 3)
+    await advance(1000)
+    assert.equal(socket.sentAt.at(-1), 30000, 'A recent unanswered push refresh does not suppress the scheduled query')
+    assert.equal(socket.sent.length, 4)
     await advance(1000)
     socket.receive({ type: 'cenc_report', data: { eventId: 'another' } })
-    assert.equal(socket.sent.length, 4, 'A new push can refresh again as soon as the previous query finishes')
     assert.equal(socket.sentAt.at(-1), 31000)
+    assert.equal(socket.sent.length, 5, 'A recent unanswered scheduled query does not suppress a push refresh')
+    await advance(31000)
+    assert.deepEqual(socket.sent.map((message, index) => [JSON.parse(message).type, socket.sentAt[index]]), [
+        ['auth', 0], ['cenc_report_list', 0], ['cenc_report_list', 29000],
+        ['cenc_report_list', 30000], ['cenc_report_list', 31000], ['query_all', 32000],
+        ['cenc_report_list', 60000], ['query_all', 62000],
+    ])
+    socket.receive({ type: 'cenc_report_list', data: [] })
+    assert.equal(socket.sent.length, 8, 'A delayed response does not schedule another query')
 })
 
-test('Lipo staggers initial lists and periodic queries, replies to heartbeats immediately, and times pending requests from sending', async t => {
+test('Lipo preserves staggered query timing while heartbeats and push refreshes send immediately', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/all', {
         key: 'test-key', reportRequests: ['cenc_report_list', 'cwa_report_list'],
@@ -469,20 +467,21 @@ test('Lipo staggers initial lists and periodic queries, replies to heartbeats im
     await advance(1000)
     socket.receive({ type: 'heartbeat', data: { id: '1', timestamp: 1793678400000 } })
     assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'heartbeat', data: { id: '1' } })
+    socket.receive({ type: 'cwa_report', data: { eventId: 'before-initial-list' } })
+    assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'cwa_report_list' })
+    assert.equal(socket.sentAt.at(-1), 1000)
     await advance(999)
-    assert.equal(socket.sent.length, 3)
+    assert.equal(socket.sent.length, 4)
     await advance(1)
     assert.equal(JSON.parse(socket.sent.at(-1)).type, 'cwa_report_list')
-    socket.receive({ type: 'cenc_report_list', data: [] })
-    socket.receive({ type: 'cwa_report_list', data: [] })
     await advance(30000)
     assert.deepEqual(socket.sent.map((message, index) => [JSON.parse(message).type, socket.sentAt[index]]), [
-        ['auth', 0], ['cenc_report_list', 0], ['heartbeat', 1000], ['cwa_report_list', 2000],
+        ['auth', 0], ['cenc_report_list', 0], ['heartbeat', 1000], ['cwa_report_list', 1000], ['cwa_report_list', 2000],
         ['cenc_report_list', 30000], ['cwa_report_list', 32000],
     ])
     const sentCount = socket.sent.length
     await advance(1999)
-    assert.equal(socket.sent.length, sentCount, 'Unanswered requests stay suppressed for 30 seconds')
+    assert.equal(socket.sent.length, sentCount, 'The next batch query keeps its two-second offset')
     await advance(1)
     assert.deepEqual(JSON.parse(socket.sent.at(-1)), { type: 'query_all' })
     await advance(25999)
