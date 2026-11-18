@@ -466,8 +466,8 @@ export const useStatusStore = defineStore('statusStore', {
                                 eqMessage.hypocenterText = '震源地: ' + eqMessage.hypocenter
                                 eqMessage.warnArea = JSON.stringify(data.source === 1 && !eqMessage.isCanceled && Array.isArray(data.warnArea)
                                     ? data.warnArea.map(item => {
-                                        const upperIntensity = item.intensity?.to
-                                        const intensity = formatShindo(typeof upperIntensity === 'string' && upperIntensity !== 'over' ? upperIntensity : '不明', false)
+                                        const areaIntensity = item.intensity?.to === 'over' ? item.intensity?.from : item.intensity?.to
+                                        const intensity = formatShindo(typeof areaIntensity === 'string' ? areaIntensity : undefined, false)
                                         return {
                                             name: item.name,
                                             intensity,

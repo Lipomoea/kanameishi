@@ -415,8 +415,25 @@ test('JMA assumption methods use provider-specific fields and clear the text on 
 
 test('Lipo JMA upstream priority preserves provider labels and replaces regional forecasts', () => {
     const { store, getProviderLabel, warnings } = setup()
-    const values = ['5+', '6弱', 'over', '不明', '0', undefined, null, 4]
-    const warnArea = values.map((to, index) => ({ name: `area-${index}`, code: index, intensity: { from: '4', to } }))
+    const values = [
+        ['4', '5+', '5強'],
+        ['4', '6弱', '6弱'],
+        ['5+', 'over', '5強'],
+        ['6-', 'over', '6弱'],
+        ['0', 'over', '0'],
+        ['不明', 'over', '不明'],
+        [undefined, 'over', '不明'],
+        [null, 'over', '不明'],
+        ['', 'over', '不明'],
+        [4, 'over', '不明'],
+        ['4', '不明', '不明'],
+        ['4', '0', '0'],
+        ['4', undefined, '不明'],
+        ['4', null, '不明'],
+        ['4', '', '不明'],
+        ['4', 4, '不明'],
+    ]
+    const warnArea = values.map(([from, to], index) => ({ name: `area-${index}`, code: index, intensity: { from, to } }))
     store.receiveLipoMessage({ type: 'jma_eew', data: event({ source: 1, warnArea, maxIntensity: '6弱' }) })
     const message = store.eqMessage.jmaEew
     assert.equal(message.type, 1)
@@ -424,7 +441,7 @@ test('Lipo JMA upstream priority preserves provider labels and replaces regional
     assert.equal(Object.hasOwn(message, 'lipoSource'), false)
     assert.equal(getProviderLabel(message), 'Lipo1')
     assert.deepEqual(JSON.parse(message.warnArea).map(({ name, intensity }) => [name, intensity]),
-        ['5強', '6弱', '不明', '不明', '0', '不明', '不明', '不明'].map((intensity, index) => [`area-${index}`, intensity]))
+        values.map(([, , expected], index) => [`area-${index}`, expected]))
     for(const fields of [
         { source: 0, reportNum: 3, warnArea: null },
         { source: 0, warnArea },
