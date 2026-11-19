@@ -27,7 +27,7 @@ const evaluateStore = (path, name, dependencies, result = `${name}()`) => {
 }
 const timeToStamp = (value, zone) => value ? Date.parse(value.replace(' ', 'T') + 'Z') - zone * 3600000 : 0
 const stampToTime = (value, zone) => new Date(value + zone * 3600000).toISOString().slice(0, 19).replace('T', ' ')
-const setup = () => {
+const setup = (dependencies = {}) => {
     setActivePinia(createPinia())
     const messages = [], sounds = [], calls = [], warnings = [], intensityCalculations = []
     const settings = {
@@ -57,6 +57,7 @@ const setup = () => {
         ElMessage: message => messages.push(message), playSound: sound => sounds.push(sound),
         focusWindow() {}, sendMyNotification() {},
         console: { log(error) { throw error }, warn(...args) { warnings.push(args) } },
+        ...dependencies,
     }, '({ store: useStatusStore(), sourceTypes, getProviderLabel })')
     store.configureDataSources(Object.fromEntries(Object.keys(dataSources.lipoSourceTypes).map(source => [source, { lipo: true }])))
     store.sourceRoutes.usgsEqlist.usgs = true
@@ -131,8 +132,9 @@ test('P2PQuake HTTP intervals follow the connection at request time, independent
     assert.deepEqual(times('/tsunami'), [2000, 4000, 6000, 36000, 38000])
 })
 
-test('USGS HTTP uses 30 ticks only when Lipo is connected and authenticated at request time', async t => {
+test('USGS HTTP uses 30 ticks only when the visible Lipo source is connected and authenticated at request time', async t => {
     const { store, advance, times } = setupHttpPolling(t)
+    store.lipoSocket = { availableSources: new Set(['usgs_report']), close() {} }
     store.webSocketStatus.lipo.readyState = 1
     store.lipoAuthStatus = -1
     store.connect('http')
@@ -155,6 +157,29 @@ test('USGS HTTP uses 30 ticks only when Lipo is connected and authenticated at r
     assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000, 51000, 81000])
 })
 
+test('USGS HTTP stays at five ticks until the current Lipo snapshot contains usgs_report', async context => {
+    const { store, advance, times } = setupHttpPolling(context)
+    store.webSocketStatus.lipo.readyState = 1
+    store.lipoAuthStatus = 1
+    store.connect('http')
+    await advance(1000)
+    store.lipoSocket = { availableSources: new Set(['cenc_report']), close() {} }
+    await advance(5000)
+    assert.deepEqual(times('/feed'), [1000, 6000])
+
+    store.lipoSocket.availableSources.add('usgs_report')
+    await advance(5000)
+    store.lipoSocket.availableSources.clear()
+    await advance(29000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000])
+    await advance(1000)
+    store.lipoSocket.availableSources.add('usgs_report')
+    await advance(5000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000])
+    await advance(30000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000, 76000])
+})
+
 test('HTTP polling counts callbacks without waiting an extra tick when clock readings are 1 ms early', async t => {
     const { store, advance, times, setClockOffset } = setupHttpPolling(t)
     store.connect('http')
@@ -168,6 +193,7 @@ test('HTTP polling counts callbacks without waiting an extra tick when clock rea
     store.webSocketStatus.p2pquake.readyState = 1
     store.webSocketStatus.lipo.readyState = 1
     store.lipoAuthStatus = 1
+    store.lipoSocket = { availableSources: new Set(['usgs_report']), close() {} }
     await advance(5000)
     setClockOffset(-2)
     await advance(30000)
@@ -197,6 +223,66 @@ test('HTTP polling respects provider switches and replaces or stops its schedule
     assert.deepEqual(times('/quake'), [4000])
     assert.deepEqual(times('/tsunami'), [5000])
     assert.deepEqual(times('/feed'), [4000])
+})
+
+const setupLipoConnection = context => {
+    class FakeClient {
+        constructor(urls, options) { this.options = options }
+        setStateHandler(handler) { handler(1, 0) }
+        setCloseHandler(handler) { this.closeHandler = handler }
+        setMessageHandler(handler) { this.messageHandler = handler }
+        close() { this.closeHandler?.() }
+    }
+    const state = setup({ LipoApiClient: FakeClient, WolfxClient: FakeClient })
+    context.after(() => state.store.disconnect())
+    return state
+}
+
+test('Lipo subscribes only to enabled provider routes and includes CENC intensity summaries', context => {
+    const { store } = setupLipoConnection(context)
+    store.connect('ws')
+    assert.deepEqual(new Set(store.lipoSocket.options.subscribe), new Set([
+        'jma_eew', 'cea_eew', 'icl_eew', 'kma_eew', 'cwa_report', 'cenc_report',
+        'kma_report', 'usgs_report', 'nmefc_tsunami', 'cenc_ir',
+    ]))
+    assert.equal(store.lipoSocket.options.subscribe.length, 10)
+    store.configureDataSources({
+        ceaEew: { lipo: true }, cwaEew: { wolfx: true },
+        cencEqlist: { wolfx: true, lipo: false }, usgsEqlist: { usgs: true, lipo: true },
+    })
+    store.connect('ws')
+    assert.deepEqual(store.lipoSocket.options.subscribe, ['cea_eew', 'usgs_report'])
+    assert.deepEqual(store.lipoSocket.options.reportRequests, ['usgs_report_list'])
+    store.configureDataSources({ cencEqlist: { wolfx: true, lipo: false } })
+    store.connect('ws')
+    assert.equal(store.lipoSocket, null)
+})
+
+test('Lipo keeps authentication success and shows a separate warning only for denied subscriptions', context => {
+    const { store, messages } = setupLipoConnection(context)
+    store.connect('ws')
+    for (const success of [['cea_eew'], []]) {
+        messages.length = 0
+        store.lipoSocket.messageHandler({
+            type: 'auth_ok',
+            data: { subscription: { success, denied: ['icl_eew', 'cenc_ir'], unknown: ['unrecognized_source'] } },
+        })
+        assert.equal(store.lipoAuthStatus, 1)
+        assert.equal(store.lipoError, '')
+        assert.deepEqual(messages, [
+            { message: 'Lipo API认证成功', type: 'success' },
+            {
+                message: 'Lipo API 以下数据源未获授权：icl_eew、cenc_ir',
+                type: 'warning', duration: 10000, showClose: true,
+            },
+        ])
+    }
+    for (const subscription of [undefined, { success: [], denied: [], unknown: ['unrecognized_source'] }]) {
+        messages.length = 0
+        store.lipoSocket.messageHandler({ type: 'auth_ok', data: { subscription } })
+        assert.equal(store.lipoAuthStatus, 1)
+        assert.deepEqual(messages, [{ message: 'Lipo API认证成功', type: 'success' }])
+    }
 })
 
 test('Lipo applies source-specific zero fallbacks while preserving report depths and time zones', () => {

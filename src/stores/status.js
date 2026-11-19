@@ -17,6 +17,7 @@ import {
     lipoSocketSources,
     wolfxSourceTypes,
     lipoSourceTypes,
+    getLipoSubscriptions,
     p2pquakeSocketSources,
 } from '@/utils/DataSources';
 
@@ -1156,6 +1157,7 @@ export const useStatusStore = defineStore('statusStore', {
                         }
                         if(source == 'usgsEqlist' && this.isApiEnabled(source, 'usgs') && tick >= nextRequestTick[source]) {
                             const lipoReady = this.webSocketStatus.lipo.readyState === 1 && this.lipoAuthStatus === 1
+                                && this.lipoSocket?.availableSources.has('usgs_report')
                             nextRequestTick[source] = tick + (lipoReady ? 30 : 5)
                             await this.fetchUsgsReports(stamp)
                         }
@@ -1203,6 +1205,7 @@ export const useStatusStore = defineStore('statusStore', {
                         if(this.activeLipoSources.includes('usgsEqlist')) reportRequests.push('usgs_report_list')
                         const client = new LipoApiClient(eqUrls.lipo_ws, {
                             key: apiKey,
+                            subscribe: getLipoSubscriptions(this.activeLipoSources),
                             reportRequests,
                             autoReconnectOnAuthFail: settingsStore.mainSettings.apiAuthAutoReconnect,
                         })
@@ -1213,11 +1216,19 @@ export const useStatusStore = defineStore('statusStore', {
                         })
                         client.setMessageHandler(message => {
                             switch(message.type) {
-                                case 'auth_ok':
+                                case 'auth_ok': {
                                     this.lipoAuthStatus = 1
                                     this.lipoError = ''
                                     ElMessage({ message: 'Lipo API认证成功', type: 'success' })
+                                    const denied = message.data?.subscription?.denied
+                                    if(Array.isArray(denied) && denied.length > 0) {
+                                        ElMessage({
+                                            message: 'Lipo API 以下数据源未获授权：' + denied.join('、'),
+                                            type: 'warning', duration: 10000, showClose: true,
+                                        })
+                                    }
                                     break
+                                }
                                 case 'error':
                                     this.lipoAuthStatus = 0
                                     this.lipoError = message.data?.message || message.data?.code || '连接失败'

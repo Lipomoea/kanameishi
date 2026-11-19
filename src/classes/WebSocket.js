@@ -177,8 +177,10 @@ const lipoProtocolErrors = new Set([
 ])
 
 export class LipoApiClient extends JsonWebSocketClient {
-    constructor(urls, { key, reportRequests = [], autoReconnectOnAuthFail = false, pews = false } = {}) {
-        super(urls, [], [JSON.stringify({ type: 'auth', key })], {
+    constructor(urls, { key, subscribe, reportRequests = [], autoReconnectOnAuthFail = false, pews = false } = {}) {
+        const authMessage = { type: 'auth', key }
+        if (!pews && subscribe !== undefined) authMessage.subscribe = subscribe
+        super(urls, [], [JSON.stringify(authMessage)], {
             resetRetryOnOpen: false,
             binaryType: pews ? 'arraybuffer' : undefined,
         })
@@ -290,6 +292,7 @@ export class LipoApiClient extends JsonWebSocketClient {
     handleClose(event) {
         this.authenticated = false
         this.ready = false
+        this.availableSources.clear()
         this.resetPewsState()
         clearInterval(this.queryTimer)
         if (!this.lastError && event?.reason && (lipoAuthenticationErrors.has(event.reason) || lipoProtocolErrors.has(event.reason))) {

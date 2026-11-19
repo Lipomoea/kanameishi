@@ -141,6 +141,12 @@ export const lipoSourceTypes = {
     nmefcTsunami: 'nmefc_tsunami',
 }
 
+export const getLipoSubscriptions = sources => {
+    const subscriptions = sources.map(source => lipoSourceTypes[source]).filter(Boolean)
+    if (sources.includes('cencEqlist')) subscriptions.push('cenc_ir')
+    return subscriptions
+}
+
 export const migrateDataSources = saved => {
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {}
     const result = {}

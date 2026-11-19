@@ -216,6 +216,85 @@ test('authentication success on one connection does not reset another connection
     assert.notEqual(first.socket, failedSocket)
 })
 
+for (const { name, options, auth } of [
+    { name: 'omitted subscription', options: {}, auth: { type: 'auth', key: 'test-key' } },
+    { name: 'empty subscription', options: { subscribe: [] }, auth: { type: 'auth', key: 'test-key', subscribe: [] } },
+    {
+        name: 'selected sources', options: { subscribe: ['cenc_report', 'cenc_ir'] },
+        auth: { type: 'auth', key: 'test-key', subscribe: ['cenc_report', 'cenc_ir'] },
+    },
+    {
+        name: 'PEWS without subscriptions', options: { pews: true, subscribe: ['kma_report'] },
+        auth: { type: 'auth', key: 'test-key' },
+    },
+]) {
+    test(`Lipo preserves ${name} in authentication after reconnecting`, async context => {
+        const { sockets, advance } = setup(context)
+        const client = new LipoApiClient(`wss://lipo.test/${options.pews ? 'kma_pews' : 'all'}`, { key: 'test-key', ...options })
+        context.after(() => client.close())
+        sockets[0].open()
+        assert.deepEqual(sockets[0].sent.map(JSON.parse), [auth])
+        sockets[0].receive({ type: 'auth_ok' })
+        sockets[0].finishClose({ code: 1006, reason: '' })
+        await advance(1000)
+        sockets[1].open()
+        assert.deepEqual(sockets[1].sent.map(JSON.parse), [auth])
+    })
+}
+
+test('Lipo filters list queries by the latest snapshot instead of subscription success', context => {
+    const { sockets } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/all', {
+        key: 'test-key', subscribe: ['cenc_report', 'usgs_report', 'kma_report'],
+        reportRequests: ['cenc_report_list', 'usgs_report_list', 'kma_report_list'],
+    })
+    context.after(() => client.close())
+    const socket = sockets[0]
+    socket.open()
+    socket.receive({
+        type: 'auth_ok',
+        data: { subscription: { success: ['cenc_report', 'usgs_report'], denied: ['kma_report'], unknown: [] } },
+    })
+    assert.equal(client.authenticated, true)
+    assert.equal(client.availableSources.size, 0)
+    socket.receive({ type: 'init', data: { cenc_report: { type: 'cenc_report', data: null, md5: null } } })
+    assert.deepEqual(socket.sent.slice(1).map(JSON.parse), [{ type: 'cenc_report_list' }])
+    socket.receive({ type: 'query_all', data: { usgs_report: { type: 'usgs_report', data: null, md5: null } } })
+    client.request('cenc_report_list')
+    client.request('kma_report_list')
+    client.request('usgs_report_list')
+    assert.deepEqual(socket.sent.slice(1).map(JSON.parse), [{ type: 'cenc_report_list' }, { type: 'usgs_report_list' }])
+    socket.receive({ type: 'query_all', data: {} })
+    client.request('usgs_report_list')
+    client.request('query_all')
+    assert.equal(client.availableSources.size, 0)
+    assert.deepEqual(socket.sent.slice(1).map(JSON.parse), [
+        { type: 'cenc_report_list' }, { type: 'usgs_report_list' }, { type: 'query_all' },
+    ])
+})
+
+test('Lipo keeps empty subscriptions authenticated with empty snapshots and heartbeat replies', async context => {
+    const { sockets, advance } = setup(context)
+    const client = new LipoApiClient('wss://lipo.test/all', {
+        key: 'test-key', subscribe: [], reportRequests: ['usgs_report_list'],
+    })
+    context.after(() => client.close())
+    const socket = sockets[0]
+    socket.open()
+    socket.receive({ type: 'auth_ok', data: { subscription: { success: [], denied: [], unknown: [] } } })
+    socket.receive({ type: 'init', data: {} })
+    socket.receive({ type: 'heartbeat', data: { id: 'empty-subscription' } })
+    await advance(30000)
+    assert.equal(client.authenticated, true)
+    assert.equal(client.ready, true)
+    assert.equal(client.availableSources.size, 0)
+    assert.deepEqual(socket.sent.map(JSON.parse), [
+        { type: 'auth', key: 'test-key', subscribe: [] },
+        { type: 'heartbeat', data: { id: 'empty-subscription' } },
+        { type: 'query_all' },
+    ])
+})
+
 test('Lipo waits for authentication and init, queries only visible requested lists, and echoes JSON heartbeat IDs', async t => {
     const { sockets, advance } = setup(t)
     const client = new LipoApiClient('wss://lipo.test/all', {
@@ -514,13 +593,16 @@ test('Lipo stops unsent batch requests on disconnect and disposal, and rebuilds 
     sockets[0].receive({ type: 'init', data: snapshot })
     await advance(1000)
     sockets[0].finishClose({ code: 1006, reason: '' })
+    assert.equal(client.availableSources.size, 0)
     await advance(1000)
     assert.deepEqual(sockets[0].sent.map(JSON.parse).map(message => message.type), ['auth', 'cenc_report_list'])
     sockets[1].open()
     await advance(2000)
     assert.deepEqual(sockets[1].sent.map(JSON.parse).map(message => message.type), ['auth'])
     sockets[1].receive({ type: 'auth_ok' })
+    assert.equal(client.availableSources.size, 0)
     sockets[1].receive({ type: 'init', data: snapshot })
+    assert.deepEqual([...client.availableSources], ['cenc_report', 'cwa_report'])
     await advance(2000)
     assert.deepEqual(sockets[1].sent.map(JSON.parse).map(message => message.type), ['auth', 'cenc_report_list', 'cwa_report_list'])
     sockets[1].receive({ type: 'cenc_report_list', data: [] })
@@ -528,6 +610,7 @@ test('Lipo stops unsent batch requests on disconnect and disposal, and rebuilds 
     await advance(28000)
     assert.equal(JSON.parse(sockets[1].sent.at(-1)).type, 'cenc_report_list')
     client.close()
+    assert.equal(client.availableSources.size, 0)
     const sentCount = sockets[1].sent.length
     await advance(60000)
     assert.equal(sockets.length, 2)
