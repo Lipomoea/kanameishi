@@ -80,7 +80,11 @@ const replayState = reactive({
 })
 const flatted = computed(() => Object.values(statusStore.history).flat())
 const sorted = computed(() => flatted.value.sort((a, b) => calcTimeDiff(b.originTime, b.timeZone, a.originTime, a.timeZone)))
-const eqlists = computed(() => sorted.value.filter(item => (settingsStore.mainSettings.historyMagThres == 0 || item.magnitude >= settingsStore.mainSettings.historyMagThres) && settingsStore.mainSettings.historySources.includes(item.source)).slice(0, maxHistoryNumber))
+const eqlists = computed(() => sorted.value.filter(item => {
+    if(!settingsStore.mainSettings.historySources.includes(item.source)) return false
+    const threshold = settingsStore.historyMagnitudeThreshold(item.source)
+    return threshold === 0 || (Number.isFinite(item.magnitude) && item.magnitude >= threshold)
+}).slice(0, maxHistoryNumber))
 onBeforeUnmount(() => {
     stopReplay()
 })

@@ -6,27 +6,6 @@
         <div class="switch">
           <el-select
             style="width: 90px;"
-            v-model="settingsStore.mainSettings.historyMagThres"
-            size="small"
-            @click.stop
-          >
-            <el-option label="所有震级" :value="0" />
-            <el-option label="2.0级以上" :value="2.0" />
-            <el-option label="2.5级以上" :value="2.5" />
-            <el-option label="3.0级以上" :value="3.0" />
-            <el-option label="3.5级以上" :value="3.5" />
-            <el-option label="4.0级以上" :value="4.0" />
-            <el-option label="4.5级以上" :value="4.5" />
-            <el-option label="5.0级以上" :value="5.0" />
-            <el-option label="5.5级以上" :value="5.5" />
-            <el-option label="6.0级以上" :value="6.0" />
-            <el-option label="6.5级以上" :value="6.5" />
-            <el-option label="7.0级以上" :value="7.0" />
-            <el-option label="7.5级以上" :value="7.5" />
-            <el-option label="8.0级以上" :value="8.0" />
-          </el-select>
-          <el-select
-            style="width: 90px;"
             v-model="settingsStore.mainSettings.historySources"
             size="small"
             multiple
@@ -44,6 +23,7 @@
             <el-option label="KMA" value="KMA" :disabled="!statusStore.enabledSource.includes('kmaEqlist')" />
             <el-option label="USGS" value="USGS" :disabled="!statusStore.enabledSource.includes('usgsEqlist')" />
           </el-select>
+          <el-button style="width: 90px;" size="small" @click.stop="showMagnitudeFilter = true">按震级筛选</el-button>
         </div>
       </div>
       <div class="content" ref="content">
@@ -54,6 +34,7 @@
         </div>
       </div>
     </div>
+    <HistoryMagnitudeFilter v-model="showMagnitudeFilter" />
   </div>
 </template>
 
@@ -63,12 +44,14 @@ import JmaTsunami from './components/JmaTsunami.vue';
 import { useSettingsStore } from '@/stores/settings';
 import { useStatusStore } from '@/stores/status';
 import EqlistHistoryComponent from './components/EqlistHistory.vue';
+import HistoryMagnitudeFilter from './components/HistoryMagnitudeFilter.vue';
 import { ref, watch, inject } from 'vue';
 
 const settingsStore = useSettingsStore()
 const statusStore = useStatusStore()
 
 const content = ref(null)
+const showMagnitudeFilter = ref(false)
 const menuId = inject('menuId')
 const scrollToTop = () => content.value.scrollTop = 0
 const smoothScrollToTop = () => {

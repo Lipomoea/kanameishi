@@ -55,6 +55,14 @@ const createDefaultSettings = () => {
             usgsActionMag: 5.0,
             actionWhiteList: '',
             historyMagThres: 0.0,
+            historyMagUnified: true,
+            historyMagThresBySource: {
+                CENC: 0.0,
+                CWA: 0.0,
+                JMA: 0.0,
+                KMA: 0.0,
+                USGS: 0.0,
+            },
             historySources: ['CENC', 'CWA', 'JMA', 'KMA', 'USGS'],
             onEew: {
                 notification: false,
@@ -139,6 +147,9 @@ const createDefaultSettings = () => {
 const restoreCoordinates = (value, fallback) => Array.isArray(value) && value.length === 2 && value.every(Number.isFinite)
     ? value.slice() : fallback.slice()
 
+const normalizeHistoryMagnitude = value => Number.isFinite(value)
+    ? Math.round(Math.min(9, Math.max(0, value)) * 10) / 10 : 0
+
 const mainSettingsArrayReaders = {
     historySources: (value, fallback) => Array.isArray(value)
         ? value.filter(source => fallback.includes(source)) : fallback.slice(),
@@ -150,6 +161,8 @@ export const useSettingsStore = defineStore('settingsStore', {
     state: createDefaultSettings,
     getters: {
         effectiveUiScale: state => state.uiScalePreview ?? state.mainSettings.uiScale,
+        historyMagnitudeThreshold: state => source => state.mainSettings.historyMagUnified
+            ? state.mainSettings.historyMagThres : state.mainSettings.historyMagThresBySource[source],
         isValidUserLatLng: (state) => state.mainSettings.userLatLng.every(item => item || item === 0) && !state.mainSettings.userLatLng.every(item => item === 0),
         isValidViewLatLng: (state) => state.mainSettings.viewLatLng.every(item => item || item === 0) && !state.mainSettings.viewLatLng.every(item => item === 0),
         isDisplayUser(state) { return this.isValidUserLatLng && state.mainSettings.displayUser },
@@ -219,6 +232,23 @@ export const useSettingsStore = defineStore('settingsStore', {
         },
     },
     actions: {
+        setHistoryMagUnified(enabled) {
+            this.mainSettings.historyMagUnified = enabled
+            if(enabled) this.setHistoryMagThres(this.mainSettings.historyMagThres)
+        },
+        setHistoryMagThres(value) {
+            const threshold = normalizeHistoryMagnitude(value)
+            this.mainSettings.historyMagThres = threshold
+            if(this.mainSettings.historyMagUnified) {
+                for(const source of Object.keys(this.mainSettings.historyMagThresBySource)) {
+                    this.mainSettings.historyMagThresBySource[source] = threshold
+                }
+            }
+        },
+        setHistorySourceMagThres(source, value) {
+            if(this.mainSettings.historyMagUnified || !Object.hasOwn(this.mainSettings.historyMagThresBySource, source)) return
+            this.mainSettings.historyMagThresBySource[source] = normalizeHistoryMagnitude(value)
+        },
         resetUnauthorizedFeatureSettings() {
             const accessStore = useAccessStore()
             if(!accessStore.canUse('iclEew')) {
@@ -252,6 +282,13 @@ export const useSettingsStore = defineStore('settingsStore', {
             const json = parseSettings(jsonString)
             json.dataSources = migrateDataSources(json.dataSources)
             this.mainSettings = restoreSettings(createDefaultSettings().mainSettings, json, mainSettingsArrayReaders)
+            // Old settings use the existing threshold for every source; independent mode keeps its own values.
+            this.setHistoryMagThres(this.mainSettings.historyMagThres)
+            if(!this.mainSettings.historyMagUnified) {
+                for(const [source, threshold] of Object.entries(this.mainSettings.historyMagThresBySource)) {
+                    this.setHistorySourceMagThres(source, threshold)
+                }
+            }
             if(!isValidUiScale(this.mainSettings.uiScale)) this.mainSettings.uiScale = 1
             if(!['realtime', 'complete'].includes(this.mainSettings.displaySeisNet.httpDataPriority)) {
                 this.mainSettings.displaySeisNet.httpDataPriority = 'realtime'

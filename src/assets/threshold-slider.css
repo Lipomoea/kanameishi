@@ -1,0 +1,32 @@
+.threshold-slider {
+    display: flex;
+    width: 100%;
+    align-items: center;
+}
+.threshold-slider__label {
+    display: flex;
+    flex-shrink: 0;
+    justify-content: space-between;
+    align-items: center;
+}
+.threshold-slider__label-text {
+    display: flex;
+    align-items: center;
+}
+.threshold-slider__value {
+    width: 22px;
+    height: 22px;
+    margin-left: 6px;
+    border-radius: 5px;
+    display: flex;
+    flex-shrink: 0;
+    justify-content: center;
+    align-items: center;
+    pointer-events: none;
+    user-select: none;
+}
+.threshold-slider .el-slider {
+    flex: 1;
+    /* Reserve room for the handle's hit area at the maximum value. */
+    margin: 0 max(1rem, calc(var(--el-slider-button-wrapper-size) / 2)) 0 1rem;
+}

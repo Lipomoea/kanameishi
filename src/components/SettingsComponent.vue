@@ -380,8 +380,8 @@
                         </el-popover>
                     </span>
                     <div class="switch-group">
-                        <div class="switch-full">
-                            <div class="justify-between" style="width: 10rem;">
+                        <MagnitudeSlider v-model="settingsStore.mainSettings.actionMag">
+                            <template #label>
                                 <span>
                                     震级阈值
                                     <el-popover
@@ -396,19 +396,14 @@
                                         <p>设置为“0”表示不作筛选。</p>
                                     </el-popover>
                                 </span>
-                                <div class="mag" :class="setClassName(calcCsisLevel(settingsStore.mainSettings.actionMag, 10, 0), false)">
-                                    {{ settingsStore.mainSettings.actionMag.toFixed(1) }}
-                                </div>
-                            </div>
-                            <el-slider
-                                v-model="settingsStore.mainSettings.actionMag"
-                                :min="0" :max="9"
-                                :step="0.1"
-                                size="small"
-                            />
-                        </div>
-                        <div class="switch-full" v-if="!settingsStore.nearestJmaLoc">
-                            <div class="justify-between" style="width: 10rem;">
+                            </template>
+                        </MagnitudeSlider>
+                        <CsisSlider
+                            v-if="!settingsStore.nearestJmaLoc"
+                            v-model="settingsStore.mainSettings.actionLocalCsis"
+                            :disabled="!settingsStore.advancedSettings.forceCalcInt"
+                        >
+                            <template #label>
                                 <span>
                                     本地烈度阈值
                                     <el-popover
@@ -432,24 +427,14 @@
                                         <p> - 10度及以上：难以站立，有抛起感；房屋大规模倒塌；山河易形。</p>
                                     </el-popover>
                                 </span>
-                                <div class="int" :class="setClassName(settingsStore.mainSettings.actionLocalCsis, false)">
-                                    <div class="csis" :class="{
-                                        'roman': settingsStore.mainSettings.useRomanCsis,
-                                        'scale-9': settingsStore.mainSettings.actionLocalCsis == 8
-                                    }">{{ formatCsis(settingsStore.mainSettings.actionLocalCsis.toString()) }}</div>
-                                </div>
-                            </div>
-                            <el-slider
-                                v-model="settingsStore.mainSettings.actionLocalCsis"
-                                :disabled="!settingsStore.advancedSettings.forceCalcInt"
-                                :min="0" :max="12"
-                                :step="1"
-                                size="small"
-                                show-stops
-                            />
-                        </div>
-                        <div class="switch-full" v-else>
-                            <div class="justify-between" style="width: 10rem;">
+                            </template>
+                        </CsisSlider>
+                        <ShindoSlider
+                            v-else
+                            v-model="settingsStore.mainSettings.actionLocalShindo"
+                            :disabled="!settingsStore.advancedSettings.forceCalcInt"
+                        >
+                            <template #label>
                                 <span>
                                     本地震度阈值
                                     <el-popover
@@ -475,84 +460,45 @@
                                         <p> - 震度7：难以站立，有抛起感；房屋大规模倒塌；山河易形。</p>
                                     </el-popover>
                                 </span>
-                                <div class="int" :class="setClassName(shindoScale[settingsStore.mainSettings.actionLocalShindo], true)">
-                                    <div class="shindo">{{ shindoScale[settingsStore.mainSettings.actionLocalShindo] }}</div>
-                                </div>
-                            </div>
-                            <el-slider
-                                v-model="settingsStore.mainSettings.actionLocalShindo"
-                                :disabled="!settingsStore.advancedSettings.forceCalcInt"
-                                :min="0" :max="9"
-                                :step="1"
-                                size="small"
-                                show-stops
-                                :format-tooltip="(value) => shindoScale[value]"
-                            />
-                        </div>
-                        <div class="switch-full pl-4">
-                            <div class="justify-between" style="width: 9rem;">
-                                <el-checkbox 
-                                    v-model="settingsStore.mainSettings.playIntenseSound" 
+                            </template>
+                        </ShindoSlider>
+                        <CsisSlider
+                            v-if="!settingsStore.nearestJmaLoc"
+                            v-model="settingsStore.mainSettings.intenseLocalCsis"
+                            class="pl-4"
+                            label-width="9rem"
+                            :disabled="!settingsStore.advancedSettings.forceCalcInt || !settingsStore.mainSettings.playIntenseSound"
+                        >
+                            <template #label>
+                                <el-checkbox
+                                    v-model="settingsStore.mainSettings.playIntenseSound"
                                     :disabled="!settingsStore.advancedSettings.forceCalcInt"
                                 >强有感提示音</el-checkbox>
-                                <div v-if="!settingsStore.nearestJmaLoc" class="int" :class="setClassName(settingsStore.mainSettings.intenseLocalCsis, false)">
-                                    <div class="csis" :class="{
-                                        'roman': settingsStore.mainSettings.useRomanCsis,
-                                        'scale-9': settingsStore.mainSettings.intenseLocalCsis == 8
-                                    }">{{ formatCsis(settingsStore.mainSettings.intenseLocalCsis.toString()) }}</div>
-                                </div>
-                                <div v-else class="int" :class="setClassName(shindoScale[settingsStore.mainSettings.intenseLocalShindo], true)">
-                                    <div class="shindo">{{ shindoScale[settingsStore.mainSettings.intenseLocalShindo] }}</div>
-                                </div>
-                            </div>
-                            <el-slider
-                                v-if="!settingsStore.nearestJmaLoc"
-                                v-model="settingsStore.mainSettings.intenseLocalCsis"
-                                :disabled="!settingsStore.advancedSettings.forceCalcInt || !settingsStore.mainSettings.playIntenseSound"
-                                :min="0" :max="12"
-                                :step="1"
-                                size="small"
-                                show-stops
-                            />
-                            <el-slider
-                                v-else
-                                v-model="settingsStore.mainSettings.intenseLocalShindo"
-                                :disabled="!settingsStore.advancedSettings.forceCalcInt || !settingsStore.mainSettings.playIntenseSound"
-                                :min="0" :max="9"
-                                :step="1"
-                                size="small"
-                                show-stops
-                                :format-tooltip="(value) => shindoScale[value]"
-                            />
-                        </div>
-                        <div class="switch-full" v-if="accessStore.canUse('gqEew')">
-                            <div class="justify-between" style="width: 10rem;">
-                                <span>GQ预警震级阈值</span>
-                                <div class="mag" :class="setClassName(calcCsisLevel(settingsStore.mainSettings.gqActionMag, 10, 0), false)">
-                                    {{ settingsStore.mainSettings.gqActionMag.toFixed(1) }}
-                                </div>
-                            </div>
-                            <el-slider
-                                v-model="settingsStore.mainSettings.gqActionMag"
-                                :min="0" :max="9"
-                                :step="0.1"
-                                size="small"
-                            />
-                        </div>
-                        <div class="switch-full">
-                            <div class="justify-between" style="width: 10rem;">
-                                <span>USGS震级阈值</span>
-                                <div class="mag" :class="setClassName(calcCsisLevel(settingsStore.mainSettings.usgsActionMag, 10, 0), false)">
-                                    {{ settingsStore.mainSettings.usgsActionMag.toFixed(1) }}
-                                </div>
-                            </div>
-                            <el-slider
-                                v-model="settingsStore.mainSettings.usgsActionMag"
-                                :min="0" :max="9"
-                                :step="0.1"
-                                size="small"
-                            />
-                        </div>
+                            </template>
+                        </CsisSlider>
+                        <ShindoSlider
+                            v-else
+                            v-model="settingsStore.mainSettings.intenseLocalShindo"
+                            class="pl-4"
+                            label-width="9rem"
+                            :disabled="!settingsStore.advancedSettings.forceCalcInt || !settingsStore.mainSettings.playIntenseSound"
+                        >
+                            <template #label>
+                                <el-checkbox
+                                    v-model="settingsStore.mainSettings.playIntenseSound"
+                                    :disabled="!settingsStore.advancedSettings.forceCalcInt"
+                                >强有感提示音</el-checkbox>
+                            </template>
+                        </ShindoSlider>
+                        <MagnitudeSlider
+                            v-if="accessStore.canUse('gqEew')"
+                            v-model="settingsStore.mainSettings.gqActionMag"
+                        >
+                            <template #label>GQ预警震级阈值</template>
+                        </MagnitudeSlider>
+                        <MagnitudeSlider v-model="settingsStore.mainSettings.usgsActionMag">
+                            <template #label>USGS震级阈值</template>
+                        </MagnitudeSlider>
                         <div class="switch-full">
                             <span>
                                 地名白名单
@@ -1430,7 +1376,7 @@ import axios from 'axios';
 import { tremConfig, setTremConfig, selectTremStationSource } from '@/features/stations/TremConfig';
 import { h, ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Key, QuestionFilled, Setting, TopRight } from '@element-plus/icons-vue';
-import { calcPassedTime, formatCsis, openUrl, playSound, setClassName, shindoScale, calcCsisLevel, formatTimeZone, systemTimeZone } from '@/utils/Utils';
+import { calcPassedTime, openUrl, playSound, formatTimeZone, systemTimeZone } from '@/utils/Utils';
 import { join, appDataDir } from "@tauri-apps/api/path";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { exists, mkdir } from "@tauri-apps/plugin-fs";
@@ -1440,6 +1386,9 @@ import { isTauri as getIsTauri } from '@tauri-apps/api/core';
 import MarkdownIt from 'markdown-it';
 import DataSourceManager from './components/DataSourceManager.vue';
 import UiScaleControl from './components/UiScaleControl.vue';
+import MagnitudeSlider from './components/MagnitudeSlider.vue';
+import CsisSlider from './components/CsisSlider.vue';
+import ShindoSlider from './components/ShindoSlider.vue';
 
 const SHOW_ABOUT_FLG = '20260313.00'
 
@@ -2263,43 +2212,6 @@ ul {
 .el-checkbox{
     height: 24px;
     margin: 0px;
-}
-.int {
-    width: 22px;
-    height: 22px;
-    margin-left: 6px;
-    border-radius: 5px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    pointer-events: none;
-    user-select: none;
-    .csis {
-        font-size: 16px;
-    }
-    .shindo {
-        font-size: 11px;
-        letter-spacing: -1px;
-        padding-right: 1px;
-    }
-    .shindo::first-letter {
-        font-size: 16px;
-        vertical-align: top;
-    }
-    .roman.scale-9 {
-        transform: scaleX(0.9);
-    }
-}
-.mag {
-    width: 28px;
-    height: 22px;
-    margin-left: 6px;
-    border-radius: 5px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    pointer-events: none;
-    user-select: none;
 }
 .el-slider {
     flex: 1;
