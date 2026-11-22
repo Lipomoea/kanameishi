@@ -788,6 +788,7 @@ export const useStatusStore = defineStore('statusStore', {
                     case 'cencEqlist':{
                         switch(provider) {
                             case 'wolfx':
+                                if(!data.No1?.EventID?.trim()) return
                                 if(calcTimeDiff(data.No1.ReportTime, 8, eqMessage.reportTime, 8) < 30000)
                                     return
                                 eqMessage.id = data.No1.EventID
@@ -1006,10 +1007,10 @@ export const useStatusStore = defineStore('statusStore', {
             let keys
             switch (source) {
                 case 'jmaEqlist':
-                    keys = Object.keys(data).filter(key => /^No\d+$/.test(key))
+                    keys = Object.keys(data).filter(key => /^No\d+$/.test(key) && data[key]?.EventID?.trim())
                     break
                 case 'cencEqlist':
-                    keys = api == 'lipo' ? Object.keys(data) : Object.keys(data).filter(key => /^No\d+$/.test(key))
+                    keys = api == 'lipo' ? Object.keys(data) : Object.keys(data).filter(key => /^No\d+$/.test(key) && data[key]?.EventID?.trim())
                     break
                 default:
                     keys = Object.keys(data)
@@ -1128,7 +1129,7 @@ export const useStatusStore = defineStore('statusStore', {
                 merged.sort((a, b) => timeToStamp(b.originTime, b.timeZone) - timeToStamp(a.originTime, a.timeZone))
                 this.history[source] = merged
             }
-            else if(list.length > 0 || api === 'lipo')
+            else if(list.length > 0 || api === 'lipo' || source === 'jmaEqlist')
                 this.history[source] = list
         },        
         connect(protocol){

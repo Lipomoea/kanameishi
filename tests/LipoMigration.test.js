@@ -692,6 +692,40 @@ test('CENC and CWA lists use new IDs/fields, preserve Wolfx merge, and replace e
     assert.equal(store.history.cencEqlist[0].id, 'wolfx:123')
 })
 
+test('Wolfx JMA/CENC history skips empty EventID slots before parsing and replaces placeholder-only snapshots', () => {
+    const { store } = setup()
+    for(const source of ['jmaEqlist', 'cencEqlist']) {
+        const valid = {
+            EventID: 'event-1', time: '2026-11-04 01:02:03', time_full: '2026/11/04 01:02:03',
+            location: 'test', placeName: 'test', type: 'reviewed',
+            latitude: '35', longitude: '140', depth: source === 'jmaEqlist' ? '10km' : '10',
+            magnitude: '0', shindo: '不明',
+        }
+        const placeholders = {
+            No1: { EventID: '' }, No3: { EventID: null }, No4: {},
+            No5: { EventID: '  ' }, No6: null,
+        }
+        store.setHistory(source, {
+            ...placeholders, No2: valid, No7: { ...valid, EventID: 'event-2' }, md5: 'hash',
+        }, 'wolfx')
+        assert.deepEqual(store.history[source].map(item => item.id), ['event-1', 'event-2'])
+        assert.equal(store.history[source][0].magnitude, 0)
+        store.setHistory(source, placeholders, 'wolfx')
+        assert.deepEqual(store.history[source], [])
+        if(source === 'cencEqlist') assert.deepEqual(store.cencHistoryCache.wolfx, [])
+    }
+})
+
+test('Wolfx CENC placeholder No1 does not overwrite the latest earthquake message', () => {
+    const { store } = setup()
+    store.setEqMessage('cencEqlist', event(), 'lipo')
+    const previous = { ...store.eqMessage.cencEqlist }
+    for(const No1 of [{ EventID: '' }, { EventID: null }, {}, { EventID: '  ' }, null]) {
+        store.setEqMessage('cencEqlist', { No1 }, 'wolfx')
+        assert.deepEqual(store.eqMessage.cencEqlist, previous)
+    }
+})
+
 test('JMA/CWA history and replay keep kanji while display formatting and intensity ranks stay equivalent', () => {
     const { store } = setup()
     const component = read('src/components/components/EqlistHistory.vue')
