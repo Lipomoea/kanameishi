@@ -1233,9 +1233,9 @@ export class JmaReportStation {
             const text = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
             this.marker.bindTooltip(`
                 <strong>${text(this.detail.name)} (${text(this.id)})</strong><br>
-                地区: ${text(this.detail.areaName)}<br>
-                经纬度: ${this.latLng[0].toFixed(2)}°N, ${this.latLng[1].toFixed(2)}°E<br>
-                观测震度: ${text(this.intensity)}
+                地域: ${text(this.detail.areaName)}<br>
+                緯度・経度: ${this.latLng[0].toFixed(2)}°N, ${this.latLng[1].toFixed(2)}°E<br>
+                観測震度: ${text(this.intensity)}
             `, { permanent: false, direction: 'top', className: 'custom-tooltip' })
             this.marker.addTo(this.map)
         }
