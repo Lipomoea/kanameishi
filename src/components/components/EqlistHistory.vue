@@ -25,15 +25,15 @@
                     <div class="location">{{ item.hypocenter || '震源 調査中' }}</div>
                     <div class="time">{{ item.originTime + ` (${formatTimeZone(item.timeZone)})` }}</div>
                     <div class="bottom">
-                        <div class="magnitude">M{{ formatHistoryValue(item.magnitude, 1) }}</div>
-                        <div class="depth">{{ formatHistoryValue(item.depth, 0, 'km') }}</div>
+                        <div class="magnitude">{{ isJmaIntensityBulletin(item) ? '規模 調査中' : 'M' + formatHistoryValue(item.magnitude, 1) }}</div>
+                        <div v-if="!isJmaIntensityBulletin(item)" class="depth">{{ formatHistoryValue(item.depth, 0, 'km') }}</div>
                         <div class="source">{{ (item.intReportId ? '*' : '') + item.source }}</div>
                     </div>
                 </div>
                 <div class="buttons" @contextmenu.prevent="handleCopy(item)">
                     <el-button class="button" type="warning" plain :disabled="!item.url" @click="openUrl(item.url)">查看网页</el-button>
                     <el-button class="button" :type="isReplaying(item) ? 'danger' : 'primary'" plain @click="toggleReplay(item)">{{ isReplaying(item) ? '停止回放' : '测站回放' }}</el-button>
-                    <el-button class="button" :type="displayIds.has(item.id) ? 'danger' : 'success'" plain :disabled="!hasHypocenter(item)" @click="displayOnMap(item)">{{ displayIds.has(item.id) ? '取消显示' : '地图显示' }}</el-button>
+                    <el-button class="button" :type="displayIds.has(historyKey(item)) ? 'danger' : 'success'" plain :disabled="!canDisplayOnMap(item)" @click="displayOnMap(item)">{{ displayIds.has(historyKey(item)) ? '取消显示' : '地图显示' }}</el-button>
                 </div>
             </div>
         </div>
@@ -66,7 +66,10 @@ const historyList = inject('historyList')
 const activeEewList = inject('activeEewList')
 
 const formatHistoryValue = (value, digits, suffix = '') => Number.isFinite(value) ? value.toFixed(digits) + suffix : '不明'
+const isJmaIntensityBulletin = item => item.source === 'JMA' && item.reportTitle === '震度速報'
 const hasHypocenter = item => Number.isFinite(item.lat) && Number.isFinite(item.lng)
+const canDisplayOnMap = item => hasHypocenter(item) || item.source === 'JMA'
+const historyKey = item => `${item.source}:${item.id}`
 
 const maxHistoryNumber = 100
 const maxReplayDuration = 10 * 60 * 1000
@@ -178,15 +181,17 @@ const handleCopy = async (item) => {
         })
     }
 }
-const displayIds = computed(() => new Set(historyList.map(event => event.eqMessage.id)))
+const displayIds = computed(() => new Set(historyList.map(event => `${event.eqMessage.historySource}:${event.eqMessage.id}`)))
 const displayOnMap = (item) => {
-    if(!hasHypocenter(item)) return
-    const event = historyList.find(event => event.eqMessage.id == item.id)
+    if(!canDisplayOnMap(item)) return
+    const event = historyList.find(event => event.eqMessage.id == item.id && event.eqMessage.historySource === item.source)
     if(event) {
         event.deactivate()
     }
     else {
         const eqMessage = Object.assign({}, defaultEqMessage, item)
+        eqMessage.historySource = item.source
+        if(item.source === 'JMA') eqMessage.jmaEventId = item.id
         eqMessage.magnitude = eqMessage.magnitude ?? -1
         eqMessage.source = 'history'
         eqMessage.title = eqMessage.titleText = '历史地震 ' + `(${item.source})`

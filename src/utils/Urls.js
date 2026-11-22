@@ -1,6 +1,7 @@
 export const eqUrls = {
   niedLatest: "http://www.kmoni.bosai.go.jp/webservice/server/pros/latest.json",
   jmaEqlist_http: "https://api.p2pquake.net/v2/history?codes=551&limit=1",
+  jmaDetail_http: "https://api.wolfx.jp/jma_earthquake_detail.json",
   usgsEqlist_http:
     "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson",
   wolfx_ws: ["wss://ws-api.wolfx.jp/all_eew"],

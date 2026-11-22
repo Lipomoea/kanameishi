@@ -10,7 +10,8 @@ import cancelCross from '@/assets/icon/hypocenter/cancelCross.svg';
 import eqlistCross from '@/assets/icon/hypocenter/eqlistCross.svg';
 import eewCircle from '@/assets/icon/hypocenter/eewCircle.svg';
 import cancelCircle from '@/assets/icon/hypocenter/cancelCircle.svg';
-import { intReportStation } from './StationClasses';
+import { intReportStation, JmaReportStation } from './StationClasses';
+import { jmaSeisIntLoc } from '@/utils/JmaSeisIntLoc';
 import { useStatusStore } from '@/stores/status';
 import { markRaw } from 'vue';
 
@@ -715,6 +716,7 @@ export class HistoryEvent extends EqlistEvent {
         super(map, eqMessage, null, smartSetView)
         if(!statusStore) statusStore = useStatusStore()
         this.historyList = historyList
+        this.jmaDetail = null
         this.renderAllStations = this.renderAllStations.bind(this)
     }
     setMark(){
@@ -735,20 +737,41 @@ export class HistoryEvent extends EqlistEvent {
     update(eqMessage){
         Object.assign(this.eqMessage, eqMessage)
         this.hypoLatLng = [this.eqMessage.lat, this.eqMessage.lng]
-        this.isValidHypo = this.hypoLatLng.some(item => !!item)
+        this.isValidHypo = this.hypoLatLng.every(Number.isFinite) && this.hypoLatLng.some(item => !!item)
         this.setMark()
         this.smartSetView()
         this.isActive = true
-        statusStore.getIrDetail(this.eqMessage?.intReportId)
+        if(this.eqMessage.jmaEventId) statusStore.getJmaDetail(this)
+        else statusStore.getIrDetail(this.eqMessage?.intReportId)
     }
     renderAllStations() {
         this.stations?.forEach(station => station.render())
     }
-    createStations(data) {
+    setJmaDetail(detail) {
+        if(this.jmaDetail === detail) return
+        this.jmaDetail = detail ? markRaw(detail) : null
+        this.createJmaStations()
+    }
+    createJmaStations() {
+        if(!settingsStore.mainSettings.displayHistoryStations || !this.jmaDetail) {
+            this.terminateStations()
+            return
+        }
+        const detail = this.jmaDetail
+        const areaNames = new Map(detail?.areas.map(area => [area.code, area.name]) ?? [])
+        const located = []
+        for(const station of detail?.stations ?? []) {
+            const location = jmaSeisIntLoc[station.name.replace(/[＊*]/g, '')]?.location
+            if(!location?.every(Number.isFinite) || getShindoRank(station.intensity) < 0) continue
+            located.push({ ...station, areaName: areaNames.get(station.areaCode) ?? '', location })
+        }
+        this.createStations(located, item => new JmaReportStation(this.map, item.code, item.location, item))
+    }
+    createStations(data, createStation = item => new intReportStation(this.map, item.stID, [item.stla, item.stlo], item)) {
         this.terminateStations()
         this.stations = markRaw([])
         data.forEach(item => {
-            const station = markRaw(new intReportStation(this.map, item.stID, [item.stla, item.stlo], item))
+            const station = markRaw(createStation(item))
             this.stations.push(station)
         })
         this.map.on('zoomend', this.renderAllStations)
@@ -765,6 +788,7 @@ export class HistoryEvent extends EqlistEvent {
     deactivate() {
         clearTimeout(this.showMenuTimer)
         this.terminateStations()
+        this.jmaDetail = null
         this.isActive = false
         this.showMenu = false
         this.removeMark()

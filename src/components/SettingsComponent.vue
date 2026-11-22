@@ -823,6 +823,10 @@
                             <span>显示区域烈度/震度列表</span>
                             <el-switch v-model="settingsStore.mainSettings.displayAreaIntensities" />
                         </div>
+                        <div class="switch-full">
+                            <span>历史事件显示观测点数据</span>
+                            <el-switch v-model="settingsStore.mainSettings.displayHistoryStations" />
+                        </div>
                     </div>
                     <span class="font-bold w-full">地名</span>
                     <div class="switch-group">

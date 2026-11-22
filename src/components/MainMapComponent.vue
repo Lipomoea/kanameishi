@@ -402,6 +402,7 @@ import SettingsComponent from './SettingsComponent.vue';
 import { verifyUpToDate, setClassName, getShindoRank, classNameArray, pointDistToCnArea, pointDistToKrArea, csisArray, shindoArray, calcCsisLevel, calcJmaShindoLevel, formatTimeZone, simplifyTopoJson, formatCsis, csisRomanArray, formatShindo, stampToTime, systemTimeZone } from '@/utils/Utils';
 import { topojsonUrls } from '@/utils/Urls';
 import { jmaSeisIntLoc } from '@/utils/JmaSeisIntLoc';
+import { mergeJmaHistoryAreas } from '@/features/history/JmaEarthquakeDetail';
 import { isTauri } from '@tauri-apps/api/core';
 import { storeToRefs } from 'pinia';
 import { simpleIcon } from '@/classes/StationClasses';
@@ -566,6 +567,14 @@ provide('historyList', historyList)
 const clearHistoryList = () => {
     while(historyList.length > 0) historyList[0].deactivate()
 }
+watch(() => settingsStore.mainSettings.displayHistoryStations, enabled => {
+    for(const event of historyList) {
+        if(!enabled) event.terminateStations()
+        else if(event.eqMessage.jmaEventId) event.createJmaStations()
+        else if(event.eqMessage.intReportId) statusStore.getIrDetail(event.eqMessage.intReportId)
+    }
+    if(historyList.length > 0) smartSetView()
+})
 watch([
     () => `${activeEewList.length}|${displayEqlistList.value.length}|${menuId.value}`,
     tempEqlistInfoPage,
@@ -1111,12 +1120,13 @@ const loadMaps = async (retries = 0) => {
         }
         trackMapLoadWatch(watch(jmaWarnArea, (newVal)=>{
             jpEewBaseMap?.setStyle(feature => {
-                const className = newVal[feature.properties.name]?.className
+                const className = (newVal[feature.properties.code] ?? newVal[feature.properties.name])?.className
                 return ({
                     color: className ? eewBaseMapActiveStroke : eewBaseMapDefaultStroke,
                     fillColor: classNameColors[className] || eewBaseMapDefaultFill
                 })
             })
+            if(menuId.value === 'eqlists' && historyList.length > 0) smartSetView()
         }, { deep: true, immediate: true }))
         if(settingsStore.advancedSettings.forceCalcInt){
             trackMapLoadWatch(watch(eewInfoList, newVal=>{
@@ -1530,9 +1540,13 @@ const jmaWarnArea = computed(()=>{
         }
     }
     else {
-        const jmaEqlistEvent = historyList.length > 0
-        ? null
-        : activeEqlistList.value.length > 0
+        if(historyList.length > 0) {
+            for(const [code, area] of Object.entries(mergeJmaHistoryAreas(historyList))) {
+                jmaWarnArea[code] = { ...area, className: setClassName(area.intensity, true) }
+            }
+            return jmaWarnArea
+        }
+        const jmaEqlistEvent = activeEqlistList.value.length > 0
         ? tempEqlists.value.endsWith('Eqlist')
         ? tempEqlists.value == 'jmaEqlist'
         ? activeEqlistList.value.find(event => event.eqMessage.source == 'jmaEqlist')
@@ -1566,7 +1580,7 @@ const shindoList = computed(() => {
         if(newShindoList.length >= 50) break
         shindoList[int]?.forEach(name => {
             newShindoList.push({
-                name,
+                name: jmaWarnArea.value[name].name || name,
                 intensity: int
             })
         })

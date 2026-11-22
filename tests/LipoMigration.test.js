@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
-import { markRaw } from 'vue'
+import { computed, markRaw, reactive } from 'vue'
 import * as dataSources from '../src/utils/DataSources.js'
 import * as settingsRestore from '../src/utils/SettingsRestore.js'
 import * as uiScale from '../src/utils/UiScale.js'
 import * as usgsData from '../src/utils/UsgsData.js'
 import { decodeKmaPewsMessage } from '../src/utils/KmaPews.js'
 import { createPewsFrame } from './fixtures/KmaPews.js'
+import { jmaDetail, report as jmaReport, quake as jmaQuake } from './fixtures/JmaEarthquakeDetail.js'
 
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8')
 const utilsSource = read('src/utils/Utils.js')
@@ -31,17 +32,18 @@ const setup = (dependencies = {}) => {
     setActivePinia(createPinia())
     const messages = [], sounds = [], calls = [], warnings = [], intensityCalculations = []
     const settings = {
-        mainSettings: { apiKeys: { lipoApiKey: 'test-key' }, onReport: { sound: true, focus: false, notification: false } },
+        mainSettings: { apiKeys: { lipoApiKey: 'test-key' }, onReport: { sound: true, focus: false, notification: false }, displayHistoryStations: true },
     }
     const http = {
         getResponse: async (...args) => { calls.push(args); return http.response },
         get: async () => http.feed,
     }
     const { store, sourceTypes, getProviderLabel } = evaluateStore('src/stores/status.js', 'useStatusStore', {
-        ...dataSources, ...usgsData, ...shindoUtils, defineStore, Http: http,
+        ...dataSources, ...usgsData, ...shindoUtils, ...jmaDetail, defineStore, Http: http,
         eqUrls: {
             cencIr_http: 'https://example.test/cenc-ir', usgsEqlist_http: 'https://example.test/feed',
             jmaEqlist_http: 'https://example.test/quake',
+            jmaDetail_http: 'https://example.test/jma-detail',
         },
         tsunamiUrls: { jmaTsunami_http: 'https://example.test/tsunami' },
         iconUrls: {}, isTauri: () => false, useSettingsStore: () => settings,
@@ -1083,9 +1085,9 @@ test('KMA history keeps UTC+9, raw I-XII intensity, zeros and missing optional f
     assert.equal(store.history.kmaEqlist.length, 0)
 })
 
-test('history map display tolerates missing magnitude/depth and rejects missing coordinates', () => {
-    const tooltips = [], historyList = []
-    const statusStore = { map: {}, getIrDetail() {} }
+test('history map display supports JMA without a hypocenter and keeps equal IDs from different sources independent', () => {
+    const tooltips = [], historyList = reactive([]), requested = []
+    const statusStore = { map: { off() {} }, getIrDetail() {}, getJmaDetail: event => requested.push(event.eqMessage.jmaEventId) }
     const L = { marker: () => ({
         bindTooltip(text) { tooltips.push(text) }, addTo() {},
     }) }
@@ -1101,13 +1103,13 @@ test('history map display tolerates missing magnitude/depth and rejects missing 
         EqlistEvent, statusStore, L, markRaw, zone => `UTC+${zone}`)
     const component = read('src/components/components/EqlistHistory.vue')
     const helpers = component.slice(component.indexOf('const formatHistoryValue'), component.indexOf('const maxHistoryNumber'))
-    const display = component.slice(component.indexOf('const displayOnMap'), component.indexOf('const createMockEew'))
+    const display = component.slice(component.indexOf('const displayIds'), component.indexOf('const createMockEew'))
     const dependencies = {
-        statusStore, historyList, defaultEqMessage: {}, reactive: value => value, HistoryEvent,
+        statusStore, historyList, defaultEqMessage: {}, reactive, computed, HistoryEvent,
         timeStore: { getTimeStamp: () => Date.parse('2026-11-04T02:00:00Z') }, stampToTime, smartSetView() {},
     }
-    const { displayOnMap, formatHistoryValue } = new Function(...Object.keys(dependencies),
-        helpers + display + '\nreturn { displayOnMap, formatHistoryValue };')(...Object.values(dependencies))
+    const { displayOnMap, formatHistoryValue, displayIds } = new Function(...Object.keys(dependencies),
+        helpers + display + '\nreturn { displayOnMap, formatHistoryValue, displayIds };')(...Object.values(dependencies))
     const missing = { id: 'kma-test', source: 'KMA', timeZone: 9, originTime: '2026-11-04 10:00:00',
         magnitude: null, depth: null, lat: null, lng: 128, hypocenter: 'test', maxIntensityText: '최대진도: ?' }
     displayOnMap(missing)
@@ -1118,6 +1120,16 @@ test('history map display tolerates missing magnitude/depth and rejects missing 
     assert.match(tooltips[0], /深度: 不明/)
     assert.equal(formatHistoryValue(0, 1), '0.0')
     assert.equal(formatHistoryValue(-1.5, 1, 'km'), '-1.5km')
+    const jma = { ...missing, source: 'JMA' }
+    displayOnMap(jma)
+    assert.equal(historyList.length, 2)
+    assert.equal(historyList[0].isValidHypo, false)
+    assert.equal(tooltips.length, 1, 'An unknown JMA epicenter does not create an invalid marker')
+    assert.deepEqual(requested, [jma.id])
+    assert.deepEqual(displayIds.value, new Set(['JMA:kma-test', 'KMA:kma-test']))
+    displayOnMap(jma)
+    assert.equal(historyList.length, 1, 'Cancel removes only the selected source')
+    assert.equal(historyList[0].eqMessage.historySource, 'KMA')
 })
 
 test('KMA consumes decoded binary station envelopes and preserves JSON frame acceptance and gap filling', () => {
@@ -1179,6 +1191,128 @@ test('tsunami ordering uses issueTime and tolerates a missing issueTime', () => 
     assert.equal(store.tsunamiMessage.nmefcTsunami.reportTime, '2026-11-04 10:00:00')
 })
 
+const jmaHistoryEvent = (id, applied) => ({
+    eqMessage: { jmaEventId: id },
+    setJmaDetail(detail) { applied.push([id, detail]) },
+})
+
+test('JMA history shares one HTTP snapshot across events and applies concurrent calls once per event', async t => {
+    t.mock.method(Date, 'now', () => 123456789)
+    const { store, http, calls } = setup(), applied = []
+    store.historyList = ['a', 'b'].map(id => jmaHistoryEvent(id, applied))
+    const [a, b] = store.historyList
+    let resolve
+    http.getResponse = (...args) => {
+        calls.push(args)
+        return new Promise(done => { resolve = done })
+    }
+    assert.equal(calls.length, 0, 'Opening the history list does not fetch details')
+    const first = store.getJmaDetail(a), duplicate = store.getJmaDetail(a), second = store.getJmaDetail(b)
+    assert.equal(calls.length, 1)
+    assert.deepEqual(calls[0], ['https://example.test/jma-detail', { params: { time: 123456789 } }])
+    resolve({ data: { events: [jmaQuake('a'), jmaQuake('b')] } })
+    await Promise.all([first, duplicate, second])
+    assert.deepEqual(applied.map(([id]) => id), ['a', 'b'])
+    store.historyList = [jmaHistoryEvent('a', applied)]
+    await store.getJmaDetail(store.historyList[0])
+    assert.equal(calls.length, 1, 'Reopening within five minutes reuses the compact cache')
+    assert.equal(applied[2][1], applied[0][1])
+})
+
+test('closing and reopening JMA during a request draws only the new event, and a bulletin refetches immediately', async () => {
+    const { store, http, calls } = setup(), applied = []
+    store.historyList = [jmaHistoryEvent('a', applied)]
+    const old = store.historyList[0]
+    let resolve
+    http.getResponse = (...args) => {
+        calls.push(args)
+        return new Promise(done => { resolve = done })
+    }
+    const first = store.getJmaDetail(old)
+    store.historyList = []
+    old.eqMessage = null
+    store.historyList.push(jmaHistoryEvent('a', applied))
+    const reopened = store.historyList[0]
+    const second = store.getJmaDetail(reopened)
+    assert.equal(calls.length, 1)
+    resolve({ data: { events: [jmaQuake('a', [jmaReport({ title: '震度速報' })])] } })
+    await Promise.all([first, second])
+    assert.equal(applied.length, 1)
+    assert.equal(applied[0][1].title, '震度速報')
+    const refresh = store.getJmaDetail(reopened)
+    assert.equal(calls.length, 2)
+    resolve({ data: { events: [jmaQuake('a')] } })
+    await refresh
+    assert.equal(applied[1][1].title, '震源・震度情報')
+})
+
+test('JMA request errors notify once per displayed event, permit retry and stay silent after closing', async () => {
+    const { store, http, messages } = setup(), applied = []
+    store.historyList = [jmaHistoryEvent('a', applied)]
+    const displayed = store.historyList[0]
+    let reject
+    http.getResponse = () => new Promise((resolve, fail) => { reject = fail })
+    const first = store.getJmaDetail(displayed), duplicate = store.getJmaDetail(displayed)
+    reject(new Error('offline'))
+    await Promise.all([first, duplicate])
+    assert.deepEqual(messages, [{ message: 'JMA震度详情读取失败', type: 'error' }])
+    assert.deepEqual(applied, [])
+    const retry = store.getJmaDetail(displayed)
+    store.historyList = []
+    displayed.eqMessage = null
+    reject(new Error('offline again'))
+    await retry
+    assert.equal(messages.length, 1)
+    http.getResponse = async () => ({ data: { events: [] } })
+    store.historyList = [jmaHistoryEvent('a', applied)]
+    await store.getJmaDetail(store.historyList[0])
+    assert.deepEqual(applied, [['a', null]])
+    assert.equal(messages.length, 1, 'Missing details do not show an additional notification')
+})
+
+test('history station toggle skips CENC requests and late results while JMA details remain available for regions', async () => {
+    const { store, settings, http, calls, messages } = setup(), drawn = [], jmaApplied = []
+    const id = '20261104010203'
+    store.historyList = [
+        { eqMessage: { intReportId: id }, createStations: data => drawn.push(data) },
+        jmaHistoryEvent('jma', jmaApplied),
+    ]
+    settings.mainSettings.displayHistoryStations = false
+    await store.getIrDetail(id)
+    assert.equal(calls.length, 0)
+    http.response = { data: { events: [jmaQuake('jma')] } }
+    await store.getJmaDetail(store.historyList[1])
+    assert.equal(calls.length, 1)
+    assert.equal(jmaApplied[0][1].areas[0].intensity, '5弱')
+
+    settings.mainSettings.displayHistoryStations = true
+    let resolve
+    http.getResponse = (...args) => {
+        calls.push(args)
+        return new Promise(done => { resolve = done })
+    }
+    const pending = store.getIrDetail(id)
+    settings.mainSettings.displayHistoryStations = false
+    const detail = [cencIrRow()]
+    resolve({ status: 200, data: { data: detail }, headers: { etag: '"toggle-etag"' } })
+    await pending
+    assert.deepEqual(drawn, [], 'An in-flight response cannot show stations after disabling')
+    settings.mainSettings.displayHistoryStations = true
+    const reopened = store.getIrDetail(id)
+    assert.equal(calls.at(-1)[1].headers['If-None-Match'], '"toggle-etag"')
+    resolve({ status: 304, headers: {} })
+    await reopened
+    assert.deepEqual(drawn, [detail])
+
+    let reject
+    http.getResponse = () => new Promise((resolve, fail) => { reject = fail })
+    const failing = store.getIrDetail(id)
+    settings.mainSettings.displayHistoryStations = false
+    reject(new Error('offline'))
+    await failing
+    assert.deepEqual(messages, [])
+})
+
 test('CENC details reuse ETag/304, clear 404s, and ignore a response after the history event closes', async () => {
     const { store, http, calls } = setup()
     const id = '20261104010203', drawn = []
@@ -1205,6 +1339,77 @@ test('CENC details reuse ETag/304, clear 404s, and ignore a response after the h
     resolve({ status: 200, data: { data: detail }, headers: {} })
     await pending
     assert.equal(drawn.length, 2)
+})
+
+test('concurrent CENC detail calls apply each response once and allow later refreshes', async () => {
+    const { store, http, calls } = setup()
+    const id = '20261104010203', drawn = []
+    let cleared = 0, resolve
+    store.historyList = [{ eqMessage: { intReportId: id }, createStations: data => drawn.push(data), terminateStations: () => cleared++ }]
+    http.getResponse = (...args) => {
+        calls.push(args)
+        return new Promise(done => { resolve = done })
+    }
+    const detail = [cencIrRow()], updated = [cencIrRow({ INT: 3 })]
+    const responses = [
+        { status: 200, data: { data: detail }, headers: { etag: '"etag-1"' } },
+        { status: 304, headers: {} },
+        { status: 404, headers: {} },
+        { status: 200, data: { data: updated }, headers: {} },
+    ]
+    for (const [index, response] of responses.entries()) {
+        const first = store.getIrDetail(id), second = store.getIrDetail(id)
+        assert.equal(calls.length, index + 1, 'Concurrent callers share one HTTP request')
+        const previousDraws = drawn.length, previousClears = cleared
+        resolve(response)
+        await Promise.all([first, second])
+        assert.equal(drawn.length - previousDraws, response.status === 404 ? 0 : 1)
+        assert.equal(cleared - previousClears, response.status === 404 ? 1 : 0)
+    }
+    assert.deepEqual(drawn, [detail, detail, updated])
+    assert.equal(calls[1][1].headers['If-None-Match'], '"etag-1"')
+    assert.deepEqual(calls[3][1].headers, {}, 'A 404 invalidates the cached ETag')
+})
+
+test('different CENC events load independently when responses arrive out of order', async () => {
+    const { store, http } = setup()
+    const ids = ['20261104010203', '20261104020304'], requests = new Map(), drawn = []
+    store.historyList = ids.map(id => ({ eqMessage: { intReportId: id }, createStations: data => drawn.push([id, data]) }))
+    http.getResponse = (url, { params }) => new Promise(resolve => requests.set(params.id, resolve))
+    const first = store.getIrDetail(ids[0]), second = store.getIrDetail(ids[1])
+    assert.equal(requests.size, 2)
+    const details = [[cencIrRow({ INT: 1 })], [cencIrRow({ INT: 4 })]]
+    requests.get(ids[1])({ status: 200, data: { data: details[1] }, headers: {} })
+    await second
+    assert.deepEqual(drawn, [[ids[1], details[1]]])
+    requests.get(ids[0])({ status: 200, data: { data: details[0] }, headers: {} })
+    await first
+    assert.deepEqual(drawn, [[ids[1], details[1]], [ids[0], details[0]]])
+})
+
+test('concurrent CENC detail failures notify once and permit a later retry', async () => {
+    const { store, http, calls, messages } = setup()
+    const id = '20261104010203', drawn = []
+    let reject
+    store.historyList = [{ eqMessage: { intReportId: id }, createStations: data => drawn.push(data) }]
+    http.getResponse = (...args) => {
+        calls.push(args)
+        return new Promise((resolve, fail) => { reject = fail })
+    }
+    const first = store.getIrDetail(id), second = store.getIrDetail(id)
+    assert.equal(calls.length, 1)
+    reject({ response: { status: 401 } })
+    await Promise.all([first, second])
+    assert.equal(messages.length, 1)
+    assert.match(messages[0].message, /API Key/)
+    const detail = [cencIrRow()]
+    http.getResponse = async (...args) => {
+        calls.push(args)
+        return { status: 200, data: { data: detail }, headers: {} }
+    }
+    await store.getIrDetail(id)
+    assert.equal(calls.length, 2)
+    assert.deepEqual(drawn, [detail])
 })
 
 test('CENC raw Excel rows render station coordinates, intensity and optional values with confirmed units', async () => {

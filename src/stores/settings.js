@@ -103,6 +103,7 @@ const createDefaultSettings = () => {
             countdownSpeech: true,
             countdownStart: 10,
             displayAreaIntensities: true,
+            displayHistoryStations: true,
             viewLatLng: [0, 0],
             defaultZoom: 5,
             uiScale: 1,

@@ -1,6 +1,6 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { compareFloat, getCsisLevelFromCsis, getLevelFromInstShindo, getMmiFromKmaLevel, getShindoFromChar, getShindoFromInstShindo, getShindoFromLevel, intScale, shindoScale } from '@/utils/Utils';
+import { compareFloat, getCsisLevelFromCsis, getLevelFromInstShindo, getMmiFromKmaLevel, getShindoFromChar, getShindoFromInstShindo, getShindoFromLevel, intScale, shindoScale, formatShindo, getShindoRank } from '@/utils/Utils';
 import { useSettingsStore } from '@/stores/settings';
 import { markRaw, ref } from 'vue';
 import '@/assets/background.css';
@@ -1212,6 +1212,41 @@ export class KmaStation {
         clearTimeout(this.activeTimer)
     }
 }
+export class JmaReportStation {
+    constructor(map, id, latLng, detail) {
+        this.map = markRaw(map)
+        this.id = id
+        this.latLng = latLng
+        this.detail = detail
+        this.intensity = detail.intensity
+        this.render()
+    }
+    render() {
+        const zoom = this.map.getZoom()
+        const iconZoom = Math.min(Math.max(zoom, 6), 10)
+        const icon = shindoIcons[iconZoom][formatShindo(this.intensity)]
+        if(this.marker) this.marker.setIcon(icon)
+        else {
+            this.marker = markRaw(L.marker(this.latLng, {
+                icon, pane: `intReportStationPane${getShindoRank(this.intensity)}`, interactive: true,
+            }))
+            const text = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+            this.marker.bindTooltip(`
+                <strong>${text(this.detail.name)} (${text(this.id)})</strong><br>
+                地区: ${text(this.detail.areaName)}<br>
+                经纬度: ${this.latLng[0].toFixed(2)}°N, ${this.latLng[1].toFixed(2)}°E<br>
+                观测震度: ${text(this.intensity)}
+            `, { permanent: false, direction: 'top', className: 'custom-tooltip' })
+            this.marker.addTo(this.map)
+        }
+    }
+    terminate() {
+        if(this.marker && this.map.hasLayer(this.marker)) this.map.removeLayer(this.marker)
+        this.map = null
+        this.marker = null
+    }
+}
+
 export class intReportStation {
     constructor(map, id, latLng, detail){
         if(!settingsStore) settingsStore = useSettingsStore()

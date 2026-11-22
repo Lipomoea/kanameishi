@@ -8,6 +8,7 @@ import { useSettingsStore } from './settings';
 import { isTauri } from '@tauri-apps/api/core';
 import { getFEName } from '@/utils/FERegions';
 import { normalizeUsgsEvent, hashUsgsContent } from '@/utils/UsgsData';
+import { JmaEarthquakeDetailCache } from '@/features/history/JmaEarthquakeDetail';
 import {
     dataSourceProviders,
     eewSources,
@@ -132,6 +133,8 @@ export const getProviderLabel = eqMessage =>
 
 const irDetailCache = new Map()
 const irDetailRequests = new Map()
+let jmaDetailCache
+const jmaDetailRequests = new WeakMap()
 
 const formatLipoNumber = (value, digits, unknown = '不明') => Number.isFinite(value) ? value.toFixed(digits) : unknown
 
@@ -1025,6 +1028,7 @@ export const useStatusStore = defineStore('statusStore', {
                         const maxIntensity = formatShindo(item.shindo, false)
                         list[i] = {
                             source: 'JMA',
+                            reportTitle: item.Title ?? '',
                             id,
                             timeZone: 9,
                             useShindo: true,
@@ -1316,44 +1320,73 @@ export const useStatusStore = defineStore('statusStore', {
             if(settingsStore.mainSettings.onReport.focus) focusWindow()
             if(settingsStore.mainSettings.onReport.notification) sendMyNotification('CENC烈度速报', message, iconUrls.info)
         },
+        async getJmaDetail(event) {
+            if(!event?.eqMessage?.jmaEventId) return
+            const existing = jmaDetailRequests.get(event)
+            if(existing) return existing
+            jmaDetailCache ??= new JmaEarthquakeDetailCache(async time => {
+                const response = await Http.getResponse(eqUrls.jmaDetail_http, { params: { time } })
+                return response.data
+            })
+            const id = event.eqMessage.jmaEventId
+            const pending = (async () => {
+                try {
+                    const detail = await jmaDetailCache.get(id)
+                    if(!this.historyList?.includes(event) || event.eqMessage?.jmaEventId !== id) return
+                    event.setJmaDetail(detail)
+                } catch(error) {
+                    if(this.historyList?.includes(event)) ElMessage({ message: 'JMA震度详情读取失败', type: 'error' })
+                }
+            })()
+            jmaDetailRequests.set(event, pending)
+            try {
+                await pending
+            } finally {
+                if(jmaDetailRequests.get(event) === pending) jmaDetailRequests.delete(event)
+            }
+        },
         async getIrDetail(id) {
             const settingsStore = useSettingsStore()
             const key = settingsStore.mainSettings.apiKeys.lipoApiKey?.trim()
-            if(!this.isApiEnabled('cencEqlist', 'lipo') || !key || !id) return
+            if(!settingsStore.mainSettings.displayHistoryStations || !this.isApiEnabled('cencEqlist', 'lipo') || !key || !id) return
             id = String(id)
             const cacheKey = key + '|' + id
-            let pending = irDetailRequests.get(cacheKey)
-            if(!pending) {
-                pending = (async () => {
+            // Share result handling as well as HTTP so concurrent callers render or notify once.
+            const existing = irDetailRequests.get(cacheKey)
+            if(existing) return existing
+            const pending = (async () => {
+                try {
                     const cached = irDetailCache.get(cacheKey)
                     const response = await Http.getResponse(eqUrls.cencIr_http, {
                         params: { id, key },
                         headers: cached?.etag ? { 'If-None-Match': cached.etag } : {},
                         validateStatus: status => status === 200 || status === 304 || status === 404,
                     })
-                    if(response.status === 304) return cached?.data
-                    if(response.status === 404) {
+                    let data
+                    if(response.status === 304) data = cached?.data
+                    else if(response.status === 404) {
                         irDetailCache.delete(cacheKey)
-                        return null
                     }
-                    const data = response.data?.data
-                    if(!Array.isArray(data)) throw new Error('INVALID_DETAIL')
-                    irDetailCache.set(cacheKey, { data, etag: response.headers.etag })
-                    while(irDetailCache.size > 25) irDetailCache.delete(irDetailCache.keys().next().value)
-                    return data
-                })()
-                irDetailRequests.set(cacheKey, pending)
-            }
+                    else {
+                        data = response.data?.data
+                        if(!Array.isArray(data)) throw new Error('INVALID_DETAIL')
+                        irDetailCache.set(cacheKey, { data, etag: response.headers.etag })
+                        while(irDetailCache.size > 25) irDetailCache.delete(irDetailCache.keys().next().value)
+                    }
+                    if(!settingsStore.mainSettings.displayHistoryStations || settingsStore.mainSettings.apiKeys.lipoApiKey?.trim() !== key || !this.isApiEnabled('cencEqlist', 'lipo')) return
+                    const event = this.historyList?.find(event => String(event.eqMessage?.intReportId) === id)
+                    if(data) event?.createStations(data)
+                    else event?.terminateStations()
+                } catch(error) {
+                    // Axios errors contain the query-string credential; display only the status.
+                    if(!settingsStore.mainSettings.displayHistoryStations) return
+                    const status = error.response?.status
+                    ElMessage({ message: status === 401 ? 'Lipo API Key不可用，无法读取烈度详情' : 'CENC烈度详情读取失败', type: 'error' })
+                }
+            })()
+            irDetailRequests.set(cacheKey, pending)
             try {
-                const data = await pending
-                if(settingsStore.mainSettings.apiKeys.lipoApiKey?.trim() !== key || !this.isApiEnabled('cencEqlist', 'lipo')) return
-                const event = this.historyList?.find(event => String(event.eqMessage?.intReportId) === id)
-                if(data) event?.createStations(data)
-                else event?.terminateStations()
-            } catch(error) {
-                // Axios errors contain the query-string credential; display only the status.
-                const status = error.response?.status
-                ElMessage({ message: status === 401 ? 'Lipo API Key不可用，无法读取烈度详情' : 'CENC烈度详情读取失败', type: 'error' })
+                await pending
             } finally {
                 if(irDetailRequests.get(cacheKey) === pending) irDetailRequests.delete(cacheKey)
             }

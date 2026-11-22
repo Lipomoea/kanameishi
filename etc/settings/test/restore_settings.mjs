@@ -63,9 +63,11 @@ const defaultAccess = snapshot(access.capabilities)
 
 try {
     assert.equal(status.seisNetReplayDelay, 0, 'New sessions start in realtime mode')
+    assert.equal(defaultMain.displayHistoryStations, true)
     const valid = {
         ...defaultMain,
         displayLegend: false,
+        displayHistoryStations: false,
         masterVolume: 0,
         actionWhiteList: '',
         apiKeys: { lipoApiKey: 'test-key' },
@@ -87,6 +89,7 @@ try {
         onEew: { sound: true, unknown: true },
     }))
     assert.equal(Object.hasOwn(settings.mainSettings, 'unknown'), false)
+    assert.equal(settings.mainSettings.displayHistoryStations, true, 'Older settings retain the existing history station behavior')
     assert.deepEqual(snapshot(settings.mainSettings.dataSources.cwaEqlist), { lipo: true })
     assert.equal(Object.hasOwn(settings.mainSettings.dataSources, 'unknownSource'), false)
     assert.equal(Object.hasOwn(settings.mainSettings.displaySeisNet, 'unknown'), false)
@@ -224,8 +227,10 @@ try {
         assert.equal(Object.hasOwn(JSON.parse(storage.get('mainSettings')).displaySeisNet, 'delay'), false)
         assert.equal(useReplayStatusStore(createPinia()).seisNetReplayDelay, 0, 'A fresh session does not inherit replay time')
         settings.mainSettings.masterVolume = 25
+        settings.mainSettings.displayHistoryStations = false
         await nextTick()
         assert.equal(JSON.parse(storage.get('mainSettings')).masterVolume, 25)
+        assert.equal(JSON.parse(storage.get('mainSettings')).displayHistoryStations, false)
 
         assert.equal(status.isResettingApp, false)
         settings.mainSettings.masterVolume = 50
