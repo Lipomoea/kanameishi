@@ -19,30 +19,35 @@ const iconRadius = 20
 
 const eewCrossIcon = L.icon({
     iconUrl: eewCross,
+    className: 'hypocenter-icon',
     iconSize: [iconRadius * 2, iconRadius * 2],
     iconAnchor: [iconRadius, iconRadius]
 })
 
 const cancelCrossIcon = L.icon({
     iconUrl: cancelCross,
+    className: 'hypocenter-icon',
     iconSize: [iconRadius * 2, iconRadius * 2],
     iconAnchor: [iconRadius, iconRadius]
 })
 
 const eqlistCrossIcon = L.icon({
     iconUrl: eqlistCross,
+    className: 'hypocenter-icon',
     iconSize: [iconRadius * 2, iconRadius * 2],
     iconAnchor: [iconRadius, iconRadius]
 })
 
 const eewCircleIcon = L.icon({
     iconUrl: eewCircle,
+    className: 'hypocenter-icon',
     iconSize: [iconRadius * 2, iconRadius * 2],
     iconAnchor: [iconRadius, iconRadius]
 })
 
 const cancelCircleIcon = L.icon({
     iconUrl: cancelCircle,
+    className: 'hypocenter-icon',
     iconSize: [iconRadius * 2, iconRadius * 2],
     iconAnchor: [iconRadius, iconRadius]
 })

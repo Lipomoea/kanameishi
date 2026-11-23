@@ -39,6 +39,10 @@ path.leaflet-interactive:focus {
   outline: none;
 }
 
+.hypocenter-icon:hover {
+  filter: opacity(0.5);
+}
+
 .custom-tooltip {
   text-align: center;
 }
