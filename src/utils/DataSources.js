@@ -94,7 +94,7 @@ export const dataSourceCatalog = {
         label: '日本気象庁: 津波情報',
         category: 'tsunami',
         displayOrder: 1,
-        apis: ['p2pquake'],
+        apis: ['wolfx'],
     },
     nmefcTsunami: {
         label: '自然资源部: 海啸预警',
@@ -122,6 +122,7 @@ export const createDefaultDataSources = () => Object.fromEntries(
 
 // Map application sources to each provider's API wire types.
 export const wolfxSourceTypes = {
+    jmaTsunami: 'jma_tsunami',
     jmaEew: 'jma_eew',
     cwaEew: 'cwa_eew',
     ceaEew: 'cenc_eew',

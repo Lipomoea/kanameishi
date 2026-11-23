@@ -1054,3 +1054,22 @@ test('provider clients send initial queries and pings immediately and repeat eve
     sockets[0].receive({ type: 'jma_eew', EventID: 'test' })
     assert.deepEqual(received, [{ type: 'jma_eew', EventID: 'test' }])
 })
+
+
+test('Wolfx tsunami queries repeat and are sent again on reconnect', async t => {
+    const { sockets, advance } = setup(t)
+    const client = new WolfxClient('wss://wolfx.test/all_eew', ['jmaTsunami'])
+    t.after(() => client.close())
+    const messages = []
+    client.setMessageHandler(message => messages.push(message))
+    sockets[0].open()
+    assert.deepEqual(sockets[0].sent, ['query_jmatsunami'])
+    sockets[0].receive({ type: 'jma_tsunami', status: 'active' })
+    assert.equal(messages[0].type, 'jma_tsunami')
+    await advance(30000)
+    assert.deepEqual(sockets[0].sent, ['query_jmatsunami', 'query_jmatsunami'])
+    sockets[0].finishClose({})
+    await advance(1000)
+    sockets[1].open()
+    assert.deepEqual(sockets[1].sent, ['query_jmatsunami'])
+})

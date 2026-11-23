@@ -1375,6 +1375,7 @@ import { useAccessStore } from '@/stores/access';
 import { useStatusStore } from '@/stores/status';
 import { chimeUrls, utilUrls } from '@/utils/Urls';
 import { APP_TITLE, APP_VERSION } from '@/utils/AppInfo';
+import { compareVersions } from '@/utils/Version';
 import Http from '@/classes/Http';
 import axios from 'axios';
 import { tremConfig, setTremConfig, selectTremStationSource } from '@/features/stations/TremConfig';
@@ -1393,8 +1394,6 @@ import UiScaleControl from './components/UiScaleControl.vue';
 import MagnitudeSlider from './components/MagnitudeSlider.vue';
 import CsisSlider from './components/CsisSlider.vue';
 import ShindoSlider from './components/ShindoSlider.vue';
-
-const SHOW_ABOUT_FLG = '20260313.00'
 
 const showNotifButton = 'Notification' in window
 const isTauri = getIsTauri()
@@ -1936,7 +1935,7 @@ const checkNewVersion = async (silent = false) => {
             downloadUrl = ''
             detail = versionInfo[0].body
         }
-        if(compareVersion(currentVersion, checkedVersion)) {
+        if(compareVersions(checkedVersion, currentVersion) > 0) {
             if(!hasNewVersion) {
                 hasNewVersion = true
                 ElMessage({
@@ -2028,47 +2027,6 @@ const checkNewVersion = async (silent = false) => {
         })
     }
 }
-const compareArray = (arr1, arr2) => {
-    arr1 = arr1.map(i => Number(i))
-    arr2 = arr2.map(i => Number(i))
-    const len1 = arr1.length
-    const len2 = arr2.length
-    const lenDiff = len1 - len2
-    if(lenDiff > 0) {
-        arr2.push(...new Array(lenDiff).fill(0))
-    }
-    else if(lenDiff < 0) {
-        arr1.push(...new Array(-lenDiff).fill(0))
-    }
-    const len = arr1.length
-    for(let i = 0; i < len; i++) {
-        if(arr1[i] > arr2[i]) return true
-        else if(arr1[i] < arr2[i]) return false
-    }
-    return false
-}
-const compareVersion = (currentVersion, checkedVersion) => {
-    const splitCurrent = currentVersion.split('-')
-    const splitChecked = checkedVersion.split('-')
-    if(compareArray(splitChecked[0].split('.'), splitCurrent[0].split('.'))) return true
-    else if(compareArray(splitCurrent[0].split('.'), splitChecked[0].split('.'))) return false
-    else if(splitChecked.length < splitCurrent.length) return true
-    else if(splitChecked.length > splitCurrent.length) return false
-    else if(splitChecked.length == 1) return false
-    else {
-        const typeArr = ['pre', 'rc']
-        const currentSuffixArr = splitCurrent[1].split('.')
-        const checkedSuffixArr = splitChecked[1].split('.')
-        if(typeArr.indexOf(currentSuffixArr[0]) > typeArr.indexOf(checkedSuffixArr[0])) return false
-        else if(typeArr.indexOf(currentSuffixArr[0]) < typeArr.indexOf(checkedSuffixArr[0])) return true
-        else {
-            currentSuffixArr.shift()
-            checkedSuffixArr.shift()
-            if(compareArray(checkedSuffixArr, currentSuffixArr)) return true
-            else return false
-        }
-    }
-}
 let autoCheckInterval
 const handleAutoCheckVersion = (val) => {
     clearInterval(autoCheckInterval)
@@ -2124,10 +2082,6 @@ onMounted(async () => {
         loadAudio()
         isAutoStart.value = await isEnabled()
     }
-    if(statusStore.isResettingApp) return
-    const localFlg = localStorage.getItem('SHOW_ABOUT_FLG') || ''
-    if(localFlg < SHOW_ABOUT_FLG) showAbout.value = true
-    statusStore.setLocalStorageItem('SHOW_ABOUT_FLG', SHOW_ABOUT_FLG)
 })
 onBeforeUnmount(() => {
     advancedVerificationDisposed = true

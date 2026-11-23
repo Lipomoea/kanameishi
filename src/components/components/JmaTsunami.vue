@@ -4,42 +4,20 @@
             <div class="title">津波到達予想</div>
             <div class="receive">{{ statusStore.tsunamiMessage.jmaTsunami.reportTime }} (UTC+9) 発表</div>
             <div class="details">
-                <div class="group" v-if="warnAreaByGrade.MajorWarning">
-                    <div class="sub-title info">
-                        <div class="purple">大津波警報</div>
-                        <div class="purple">到達予想</div>
-                        <div class="purple">最大波</div>
+                <template v-for="group in groups" :key="group.grade">
+                    <div class="group" v-if="warnAreaByGrade[group.grade]">
+                        <div class="sub-title info">
+                            <div :class="group.className">{{ group.title }}</div>
+                            <div :class="group.className">到達予想</div>
+                            <div :class="group.className">最大波</div>
+                        </div>
+                        <div class="info" v-for="item in warnAreaByGrade[group.grade]" :key="item.code">
+                            <div class="name" :class="item.name.length > 8 ? 'small' : ''">{{ item.name }}</div>
+                            <div class="arrival-time">{{ formatTsunamiArrival(item.condition, item.arrivalTime) }}</div>
+                            <div class="description" :class="group.fontClass">{{ item.description }}</div>
+                        </div>
                     </div>
-                    <div class="info" v-for="(item, index) of warnAreaByGrade.MajorWarning" :key="index">
-                        <div class="name" :class="item.name.length > 8 ? 'small' : ''">{{ item.name }}</div>
-                        <div class="arrival-time">{{ formatArrival(item.condition, item.arrivalTime) }}</div>
-                        <div class="description font-purple">{{ formatDescription(item.description) }}</div>
-                    </div>
-                </div>
-                <div class="group" v-if="warnAreaByGrade.Warning">
-                    <div class="sub-title info">
-                        <div class="red">津波警報</div>
-                        <div class="red">到達予想</div>
-                        <div class="red">最大波</div>
-                    </div>
-                    <div class="info" v-for="(item, index) of warnAreaByGrade.Warning" :key="index">
-                        <div class="name" :class="item.name.length > 8 ? 'small' : ''">{{ item.name }}</div>
-                        <div class="arrival-time">{{ formatArrival(item.condition, item.arrivalTime) }}</div>
-                        <div class="description font-red">{{ formatDescription(item.description) }}</div>
-                    </div>
-                </div>
-                <div class="group" v-if="warnAreaByGrade.Watch">
-                    <div class="sub-title info">
-                        <div class="yellow">津波注意報</div>
-                        <div class="yellow">到達予想</div>
-                        <div class="yellow">最大波</div>
-                    </div>
-                    <div class="info" v-for="(item, index) of warnAreaByGrade.Watch" :key="index">
-                        <div class="name" :class="item.name.length > 8 ? 'small' : ''">{{ item.name }}</div>
-                        <div class="arrival-time">{{ formatArrival(item.condition, item.arrivalTime) }}</div>
-                        <div class="description font-black">{{ formatDescription(item.description) }}</div>
-                    </div>
-                </div>
+                </template>
             </div>
         </div>
     </div>
@@ -47,51 +25,37 @@
 
 <script setup>
 import '@/assets/background.css';
-import { defaultTsunamiMessage, useStatusStore } from '@/stores/status';
+import { useStatusStore } from '@/stores/status';
 import { useSettingsStore } from '@/stores/settings';
 import { computed, watch, inject, onBeforeUnmount } from 'vue';
 import { focusWindow, openUrl, playSound, sendMyNotification } from '@/utils/Utils';
 import { iconUrls } from '@/utils/Urls';
+import { formatTsunamiArrival, getTsunamiSound, jmaTsunamiTitles } from '@/utils/Tsunami';
 
 const statusStore = useStatusStore()
 const settingsStore = useSettingsStore()
 const handleTempEqlists = inject('handleTempEqlists')
+const groups = [
+    { grade: 'major_warning', title: jmaTsunamiTitles[4], className: 'purple', fontClass: 'font-purple' },
+    { grade: 'warning', title: jmaTsunamiTitles[3], className: 'red', fontClass: 'font-red' },
+    { grade: 'advisory', title: jmaTsunamiTitles[2], className: 'yellow', fontClass: 'font-black' },
+    { grade: 'forecast', title: '若干の海面変動', className: 'blue', fontClass: 'font-black' },
+]
 const warnAreaByGrade = computed(() => {
-    const warnAreaByGrade = {}
-    const warnArea = JSON.parse(statusStore.tsunamiMessage.jmaTsunami.warnArea)
-    warnArea.forEach(item => {
-        const grade = item.grade
-        if(!warnAreaByGrade[grade]) warnAreaByGrade[grade] = []
-        warnAreaByGrade[grade].push(item)
-    })
-    return warnAreaByGrade
+    const result = {}
+    for (const area of JSON.parse(statusStore.tsunamiMessage.jmaTsunami.warnArea)) {
+        (result[area.grade] ||= []).push(area)
+    }
+    return result
 })
+const handleClick = () => openUrl('https://typhoon.yahoo.co.jp/weather/jp/tsunami/')
 
-const formatArrival = (condition, arrivalTime) => {
-    if(condition) {
-        switch(condition) {
-            case '津波到達中と推測':
-                return '到達か'
-            case 'ただちに津波来襲と予測':
-                return 'すぐ来る'
-            case '第１波の到達を確認':
-                return 'すでに到達'
-            default:
-                return condition
-        }
-    }
-    else {
-        return arrivalTime.slice(8, -3).replace(' ', '日 ')
-    }
-}
-const formatDescription = description => description.replace('０', '0').replace('１', '1').replace('３', '3').replace('５', '5').replace('ｍ', 'm')
-const handleClick = ()=>{
-    openUrl('https://typhoon.yahoo.co.jp/weather/jp/tsunami/')
-}
-
-let oldMessage = Object.assign({}, defaultTsunamiMessage)
-let currentStatus = 'notsunami'
+let handledAction = null
 const soundTimers = new Set()
+const clearSounds = () => {
+    soundTimers.forEach(timer => clearTimeout(timer))
+    soundTimers.clear()
+}
 const scheduleSound = (sound, delay) => {
     const timer = setTimeout(() => {
         soundTimers.delete(timer)
@@ -100,73 +64,37 @@ const scheduleSound = (sound, delay) => {
     soundTimers.add(timer)
 }
 watch(
-    [() => statusStore.map, () => statusStore.tsunamiMessage.jmaTsunami],
-    ([map, newMessage]) => {
-        if(map !== null) {
-            let title, body, icon, speech, playEws = false, shouldFocus = true
-            if(newMessage.status > oldMessage.status) {
-                currentStatus = `tsunami${newMessage.status}issue`
-                title = newMessage.title + 'が発表されました'
-                body = newMessage.status > 1 ? '今すぐ避難！' : '海岸から離れてください。'
-                icon = newMessage.status > 1 ? iconUrls.warn : iconUrls.caution
-                speech = currentStatus
-                playEws = newMessage.status > 1
-            }
-            else if(newMessage.status < oldMessage.status) {
-                if(newMessage.status == 0) {
-                    currentStatus = `tsunami${oldMessage.status}cancel`
-                    title = oldMessage.title + 'が解除されました'
-                    body = '今後の情報に注意してください。'
-                    icon = iconUrls.info
-                    speech = currentStatus
-                }
-                else {
-                    currentStatus = `tsunami${newMessage.status}switch`
-                    title = newMessage.title + 'に切り替えられました'
-                    body = '今後の情報に注意してください。'
-                    icon = iconUrls.info
-                    speech = currentStatus
-                }
-            }
-            else {
-                if(newMessage.status == 0) {
-                    currentStatus = 'notsunami'
-                    shouldFocus = false
-                }
-                else {
-                    currentStatus = `tsunami${newMessage.status}update`
-                    title = newMessage.title + 'が更新されました'
-                    body = newMessage.status > 1 ? '今すぐ避難！' : '海岸から離れてください。'
-                    icon = newMessage.status > 1 ? iconUrls.warn : iconUrls.caution
-                    speech = currentStatus
-                }
-            }
-            const { notification, sound, focus } = settingsStore.mainSettings.onTsunami
-            if(notification && title) {
-                sendMyNotification(title, body, icon)
-            }
-            if(sound && speech) {
-                if(playEws) {
-                    scheduleSound('ews', 1500)
-                    scheduleSound(speech, 12000)
-                }
-                else {
-                    playSound(speech)
-                }
-            }
-            if(focus && shouldFocus) {
-                focusWindow()
-            }
-            if(shouldFocus) handleTempEqlists(settingsStore.mainSettings.tempTsunamiDuration * 1000, 'jmaTsunami')
-            Object.assign(oldMessage, newMessage)
+    [() => statusStore.map, () => statusStore.jmaTsunamiAction],
+    ([map, event]) => {
+        if (map === null || !event || event === handledAction) return
+        handledAction = event
+        if (event.action !== 'clear' && !statusStore.isActive.jmaTsunami) return
+        const { action, status, title: reportTitle } = event
+        const urgent = status >= 3
+        let title, body = urgent ? '今すぐ避難！' : status === 2 ? '海岸から離れてください。' : '今後の情報に注意してください。'
+        let icon = urgent ? iconUrls.warn : status === 2 ? iconUrls.caution : iconUrls.info
+        if (action === 'issue') title = reportTitle + 'が発表されました'
+        else if (action === 'update') title = reportTitle + 'が更新されました'
+        else {
+            title = reportTitle + (action === 'clear' ? 'が解除されました' : 'に切り替えられました')
+            body = '今後の情報に注意してください。'
+            icon = iconUrls.info
         }
+        const { notification, sound, focus } = settingsStore.mainSettings.onTsunami
+        if (notification) sendMyNotification(title, body, icon)
+        if (sound) {
+            const speech = getTsunamiSound(status, action)
+            if (action === 'issue' && urgent) {
+                scheduleSound('ews', 1500)
+                scheduleSound(speech, 12000)
+            } else playSound(speech)
+        }
+        if (focus) focusWindow()
+        handleTempEqlists(settingsStore.mainSettings.tempTsunamiDuration * 1000, 'jmaTsunami')
     },
-    { immediate: true, deep: true }
+    { immediate: true }
 )
-onBeforeUnmount(() => {
-    soundTimers.forEach(timer => clearTimeout(timer))
-    soundTimers.clear()
-})
+onBeforeUnmount(clearSounds)
 </script>
 
 <style lang="scss" scoped>

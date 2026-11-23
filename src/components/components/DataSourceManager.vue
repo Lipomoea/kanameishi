@@ -119,9 +119,11 @@ const visibleSources = computed(() => Object.keys(dataSourceCatalog).filter(sour
 const sourcesFor = category => visibleSources.value
     .filter(source => dataSourceCatalog[source].category == category)
     .sort((sourceA, sourceB) => dataSourceCatalog[sourceA].displayOrder - dataSourceCatalog[sourceB].displayOrder)
-const providersFor = category => [...new Set(
-    sourcesFor(category).flatMap(source => dataSourceCatalog[source].apis)
-)]
+const providersFor = category => {
+    const providers = new Set(sourcesFor(category).flatMap(source => dataSourceCatalog[source].apis))
+    // 各分类统一采用 provider 定义顺序，避免随数据源行顺序改变列的位置。
+    return Object.keys(dataSourceProviders).filter(provider => providers.has(provider))
+}
 
 const toggleSource = (source, enabled) => {
     if(enabled && !settingsStore.isDataSourceAvailable(source)) return

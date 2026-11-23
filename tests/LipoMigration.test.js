@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
-import { computed, markRaw, reactive } from 'vue'
+import { computed, markRaw, reactive, watch, nextTick } from 'vue'
 import * as dataSources from '../src/utils/DataSources.js'
 import * as settingsRestore from '../src/utils/SettingsRestore.js'
 import * as uiScale from '../src/utils/UiScale.js'
 import * as usgsData from '../src/utils/UsgsData.js'
+import * as tsunami from '../src/utils/Tsunami.js'
+import { reportTime as tsunamiTime, tsunamiReport } from './fixtures/JmaTsunami.js'
 import { decodeKmaPewsMessage } from '../src/utils/KmaPews.js'
 import { createPewsFrame } from './fixtures/KmaPews.js'
 import { jmaDetail, report as jmaReport, quake as jmaQuake } from './fixtures/JmaEarthquakeDetail.js'
@@ -39,13 +41,13 @@ const setup = (dependencies = {}) => {
         get: async () => http.feed,
     }
     const { store, sourceTypes, getProviderLabel } = evaluateStore('src/stores/status.js', 'useStatusStore', {
-        ...dataSources, ...usgsData, ...shindoUtils, ...jmaDetail, defineStore, Http: http,
+        ...dataSources, ...usgsData, ...tsunami, ...shindoUtils, ...jmaDetail, defineStore, Http: http,
         eqUrls: {
             cencIr_http: 'https://example.test/cenc-ir', usgsEqlist_http: 'https://example.test/feed',
             jmaEqlist_http: 'https://example.test/quake',
             jmaDetail_http: 'https://example.test/jma-detail',
         },
-        tsunamiUrls: { jmaTsunami_http: 'https://example.test/tsunami' },
+        useTimeStore: () => ({ getTimeStamp: () => Date.now() }),
         iconUrls: {}, isTauri: () => false, useSettingsStore: () => settings,
         systemTimeZone: 8, timeToStamp, stampToTime,
         convertCompactTimeString: () => null,
@@ -92,7 +94,7 @@ const setupHttpPolling = t => {
     t.mock.method(globalThis, 'clearInterval', id => timers.delete(id))
     const { store, http } = setup()
     store.configureDataSources({
-        jmaEqlist: { p2pquake: true }, jmaTsunami: { p2pquake: true }, usgsEqlist: { usgs: true },
+        jmaEqlist: { p2pquake: true }, jmaTsunami: { wolfx: true }, usgsEqlist: { usgs: true },
     })
     http.get = async url => { requests.push({ path: new URL(url).pathname, at: Date.now() }) }
     t.after(() => store.disconnect())
@@ -111,30 +113,34 @@ const setupHttpPolling = t => {
     return { store, advance, times, setClockOffset: offset => { clockOffset = offset } }
 }
 
-test('P2PQuake HTTP intervals follow the connection at request time, independently of cached message IDs', async t => {
+test('P2PQuake polls every second while disconnected and every 30 seconds while connected', async t => {
     const { store, advance, times } = setupHttpPolling(t)
     store.eqMessage.jmaEqlist.id = 'cached-quake'
     store.tsunamiMessage.jmaTsunami.id = 'cached-tsunami'
     store.webSocketStatus.p2pquake.readyState = 0
     store.connect('http')
     await advance(4000)
-    assert.deepEqual(times('/quake'), [1000, 3000])
-    assert.deepEqual(times('/tsunami'), [2000, 4000])
+    assert.deepEqual(times('/quake'), [1000, 2000, 3000, 4000])
+    assert.deepEqual(times('/tsunami'), [])
 
     store.webSocketStatus.p2pquake.readyState = 1
     store.eqMessage.jmaEqlist.id = ''
     store.tsunamiMessage.jmaTsunami.id = ''
-    await advance(2000)
+    await advance(30000)
+    assert.deepEqual(times('/quake'), [1000, 2000, 3000, 4000, 5000])
+    await advance(1000)
+    assert.deepEqual(times('/quake'), [1000, 2000, 3000, 4000, 5000, 35000])
     store.webSocketStatus.p2pquake.readyState = 3
-    await advance(28000)
-    assert.deepEqual(times('/quake'), [1000, 3000, 5000])
-    assert.deepEqual(times('/tsunami'), [2000, 4000, 6000])
-    await advance(4000)
-    assert.deepEqual(times('/quake'), [1000, 3000, 5000, 35000, 37000])
-    assert.deepEqual(times('/tsunami'), [2000, 4000, 6000, 36000, 38000])
+    await advance(3000)
+    assert.deepEqual(times('/quake'), [1000, 2000, 3000, 4000, 5000, 35000, 36000, 37000, 38000])
+    assert.deepEqual(times('/tsunami'), [])
+    store.webSocketStatus.p2pquake.readyState = 1
+    await advance(31000)
+    assert.deepEqual(times('/quake'), [1000, 2000, 3000, 4000, 5000, 35000, 36000, 37000, 38000, 39000, 69000])
+    assert.deepEqual(times('/tsunami'), [])
 })
 
-test('USGS HTTP uses 30 ticks only when the visible Lipo source is connected and authenticated at request time', async t => {
+test('USGS authentication loss schedules fallback five ticks after last availability', async t => {
     const { store, advance, times } = setupHttpPolling(t)
     store.lipoSocket = { availableSources: new Set(['usgs_report']), close() {} }
     store.webSocketStatus.lipo.readyState = 1
@@ -145,21 +151,42 @@ test('USGS HTTP uses 30 ticks only when the visible Lipo source is connected and
 
     store.lipoAuthStatus = 1
     await advance(5000)
-    store.lipoAuthStatus = 0
-    await advance(29000)
     assert.deepEqual(times('/feed'), [1000, 6000, 11000])
+    store.lipoAuthStatus = 0
     await advance(1000)
-    store.webSocketStatus.lipo.readyState = 3
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000])
+    await advance(4000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 16000])
+    await advance(10000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 16000, 21000, 26000])
     store.lipoAuthStatus = 1
     await advance(5000)
-    store.webSocketStatus.lipo.readyState = 1
-    await advance(5000)
-    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000, 51000])
     await advance(30000)
-    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000, 51000, 81000])
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 16000, 21000, 26000, 31000, 61000])
 })
 
-test('USGS HTTP stays at five ticks until the current Lipo snapshot contains usgs_report', async context => {
+test('USGS socket loss starts HTTP fallback before the pending 30-second request', async t => {
+    const { store, advance, times } = setupHttpPolling(t)
+    store.lipoSocket = { availableSources: new Set(['usgs_report']), close() {} }
+    store.webSocketStatus.lipo.readyState = 1
+    store.lipoAuthStatus = 1
+    store.connect('http')
+    await advance(4000)
+    assert.deepEqual(times('/feed'), [1000])
+    store.webSocketStatus.lipo.readyState = 3
+    await advance(1000)
+    assert.deepEqual(times('/feed'), [1000])
+    await advance(4000)
+    assert.deepEqual(times('/feed'), [1000, 9000])
+    await advance(10000)
+    assert.deepEqual(times('/feed'), [1000, 9000, 14000, 19000])
+    store.webSocketStatus.lipo.readyState = 1
+    await advance(5000)
+    await advance(30000)
+    assert.deepEqual(times('/feed'), [1000, 9000, 14000, 19000, 24000, 54000])
+})
+
+test('USGS source disappearance starts fallback once and missing snapshots retain five-second polling', async context => {
     const { store, advance, times } = setupHttpPolling(context)
     store.webSocketStatus.lipo.readyState = 1
     store.lipoAuthStatus = 1
@@ -172,14 +199,32 @@ test('USGS HTTP stays at five ticks until the current Lipo snapshot contains usg
     store.lipoSocket.availableSources.add('usgs_report')
     await advance(5000)
     store.lipoSocket.availableSources.clear()
-    await advance(29000)
+    await advance(1000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000])
+    await advance(3000)
     assert.deepEqual(times('/feed'), [1000, 6000, 11000])
     await advance(1000)
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 16000])
     store.lipoSocket.availableSources.add('usgs_report')
     await advance(5000)
-    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000])
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 16000, 21000])
     await advance(30000)
-    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 41000, 46000, 76000])
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 16000, 21000, 51000])
+})
+
+test('USGS connection flapping preserves earlier deadlines without polling more than once every five ticks', async t => {
+    const { store, advance, times } = setupHttpPolling(t)
+    store.lipoSocket = { availableSources: new Set(['usgs_report']), close() {} }
+    store.webSocketStatus.lipo.readyState = 1
+    store.lipoAuthStatus = 1
+    store.connect('http')
+    await advance(1000)
+
+    for(let tick = 2; tick <= 26; tick++) {
+        store.webSocketStatus.lipo.readyState = tick % 2 === 0 ? 3 : 1
+        await advance(1000)
+    }
+    assert.deepEqual(times('/feed'), [1000, 6000, 11000, 16000, 21000, 26000])
 })
 
 test('HTTP polling counts callbacks without waiting an extra tick when clock readings are 1 ms early', async t => {
@@ -188,8 +233,8 @@ test('HTTP polling counts callbacks without waiting an extra tick when clock rea
     await advance(1000)
     setClockOffset(-1)
     await advance(5000)
-    assert.deepEqual(times('/quake'), [1000, 2999, 4999])
-    assert.deepEqual(times('/tsunami'), [1999, 3999, 5999])
+    assert.deepEqual(times('/quake'), [1000, 1999, 2999, 3999, 4999, 5999])
+    assert.deepEqual(times('/tsunami'), [])
     assert.deepEqual(times('/feed'), [1000, 5999])
 
     store.webSocketStatus.p2pquake.readyState = 1
@@ -199,8 +244,8 @@ test('HTTP polling counts callbacks without waiting an extra tick when clock rea
     await advance(5000)
     setClockOffset(-2)
     await advance(30000)
-    assert.deepEqual(times('/quake'), [1000, 2999, 4999, 6999, 36998])
-    assert.deepEqual(times('/tsunami'), [1999, 3999, 5999, 7999, 37998])
+    assert.deepEqual(times('/quake'), [1000, 1999, 2999, 3999, 4999, 5999, 6999, 36998])
+    assert.deepEqual(times('/tsunami'), [])
     assert.deepEqual(times('/feed'), [1000, 5999, 10999, 40998])
 })
 
@@ -213,17 +258,17 @@ test('HTTP polling respects provider switches and replaces or stops its schedule
     assert.deepEqual(times('/tsunami'), [])
     assert.deepEqual(times('/feed'), [])
 
-    store.configureDataSources({ jmaEqlist: { p2pquake: true }, jmaTsunami: { p2pquake: true }, usgsEqlist: { usgs: true } })
+    store.configureDataSources({ jmaEqlist: { p2pquake: true }, jmaTsunami: { wolfx: true }, usgsEqlist: { usgs: true } })
     store.connect('http')
     store.connect('http')
     await advance(2000)
-    assert.deepEqual(times('/quake'), [4000])
-    assert.deepEqual(times('/tsunami'), [5000])
+    assert.deepEqual(times('/quake'), [4000, 5000])
+    assert.deepEqual(times('/tsunami'), [])
     assert.deepEqual(times('/feed'), [4000])
     store.disconnect()
     await advance(60000)
-    assert.deepEqual(times('/quake'), [4000])
-    assert.deepEqual(times('/tsunami'), [5000])
+    assert.deepEqual(times('/quake'), [4000, 5000])
+    assert.deepEqual(times('/tsunami'), [])
     assert.deepEqual(times('/feed'), [4000])
 })
 
@@ -1186,7 +1231,7 @@ test('tsunami ordering uses issueTime and tolerates a missing issueTime', () => 
     }
     store.setTsunamiMessage('nmefcTsunami', data)
     assert.equal(store.tsunamiMessage.nmefcTsunami.reportTime, '2026-11-04 10:00:00')
-    assert.equal(store.tsunamiMessage.nmefcTsunami.status, 1)
+    assert.equal(store.tsunamiMessage.nmefcTsunami.status, 2)
     store.setTsunamiMessage('nmefcTsunami', { ...data, timeInfo: { ...data.timeInfo, issueTime: null } })
     assert.equal(store.tsunamiMessage.nmefcTsunami.reportTime, '2026-11-04 10:00:00')
 })
@@ -1506,4 +1551,229 @@ test('KMA history can be selected and restored without adding it to an existing 
     assert.deepEqual(store.mainSettings.historySources, ['KMA', 'USGS'])
     store.setMainSettings(JSON.stringify({ historySources: [] }))
     assert.deepEqual(store.mainSettings.historySources, [])
+})
+
+
+test('Wolfx tsunami renewal, local hiding and official clear remain independent', () => {
+    let now = tsunamiTime
+    const { store } = setup({ useTimeStore: () => ({ getTimeStamp: () => now }) })
+    store.configureDataSources({ jmaTsunami: { wolfx: true }, nmefcTsunami: { lipo: true } })
+    store.setTsunamiMessage('nmefcTsunami', {
+        reportId: 'cn', timeInfo: { issueTime: '2026-11-24 08:00:00' },
+        warningInfo: { level: '蓝色' }, forecasts: [{ warningLevel: '蓝色', forecastArea: 'test', estimatedArrivalTime: '09:00' }],
+    })
+    assert.equal(store.tsunamiMessage.nmefcTsunami.status, 1)
+    assert.equal(JSON.parse(store.tsunamiMessage.nmefcTsunami.warnArea)[0].description, '30cm')
+    store.setTsunamiMessage('jmaTsunami', tsunamiReport())
+    assert.equal(store.isActive.jmaTsunami, true)
+    const action = store.jmaTsunamiAction
+    assert.equal(action.action, 'issue')
+    now = tsunamiTime + 90000 + tsunami.tsunamiExpiryGrace + 1
+    store.updateJmaTsunamiDisplay()
+    assert.equal(store.jmaTsunamiDisplayState, 'expired')
+    assert.equal(store.isActive.jmaTsunami, false)
+    assert.equal(store.isActive.nmefcTsunami, true)
+    assert.equal(store.tsunamiMessage.jmaTsunami.status, 3)
+    assert.equal(store.jmaTsunamiAction, action)
+    store.setTsunamiMessage('jmaTsunami', tsunamiReport())
+    assert.equal(store.isActive.jmaTsunami, false)
+    store.setTsunamiMessage('jmaTsunami', tsunamiReport({ validUntil: new Date(now + 90000).toISOString() }))
+    assert.equal(store.isActive.jmaTsunami, true)
+    assert.equal(store.jmaTsunamiAction, action)
+    now += 90000 + tsunami.tsunamiExpiryGrace + 1
+    store.updateJmaTsunamiDisplay()
+    const changed = tsunamiReport({ validUntil: new Date(now + 90000).toISOString() })
+    changed.areas[0].maxWave.height = 4
+    store.setTsunamiMessage('jmaTsunami', changed)
+    assert.equal(store.isActive.jmaTsunami, true)
+    assert.equal(store.jmaTsunamiAction.action, 'update')
+    now += 90000 + tsunami.tsunamiExpiryGrace + 1
+    store.updateJmaTsunamiDisplay()
+    store.setTsunamiMessage('jmaTsunami', tsunamiReport({ status: 'cleared' }))
+    assert.equal(store.jmaTsunamiAction.action, 'clear')
+    assert.equal(store.jmaTsunamiAction.status, 3)
+    const clearAction = store.jmaTsunamiAction
+    store.setTsunamiMessage('jmaTsunami', tsunamiReport({ status: 'expired' }))
+    store.setTsunamiMessage('jmaTsunami', tsunamiReport({ validUntil: new Date(now + 90000).toISOString() }))
+    assert.equal(store.jmaTsunamiAction, clearAction)
+    assert.equal(store.isActive.jmaTsunami, false)
+})
+
+test('NMEFC levels include blue and keep strict issueTime ordering', () => {
+    const { store } = setup()
+    for (const [i, level] of ['蓝色', '黄色', '橙色', '红色'].entries()) {
+        const data = { reportId: String(i), timeInfo: { issueTime: '2026-11-24 08:0' + i + ':00' }, warningInfo: { level }, forecasts: [] }
+        store.setTsunamiMessage('nmefcTsunami', data)
+        assert.equal(store.tsunamiMessage.nmefcTsunami.status, i + 1)
+        store.setTsunamiMessage('nmefcTsunami', { ...data, warningInfo: { level: '解除' } })
+        assert.equal(store.tsunamiMessage.nmefcTsunami.status, i + 1)
+    }
+})
+
+
+const mountTsunamiScript = (name, store, settings) => {
+    const source = read('src/components/components/' + name + '.vue').split('<script setup>')[1].split('</script>')[0]
+        .replace(/^import[^\n]*$/gm, '')
+    const cleanups = [], sounds = [], notifications = [], focuses = [], temporary = []
+    const dependencies = {
+        ...tsunami, computed,
+        defaultTsunamiMessage: { status: 0, title: '', warnArea: '[]' },
+        useStatusStore: () => store, useSettingsStore: () => settings,
+        watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop },
+        inject: () => (...args) => temporary.push(args), onBeforeUnmount: fn => cleanups.push(fn),
+        openUrl() {}, playSound: value => sounds.push(value),
+        sendMyNotification: (...args) => notifications.push(args), focusWindow: () => focuses.push(true),
+        iconUrls: { info: 'info', caution: 'caution', warn: 'warn' },
+    }
+    new Function(...Object.keys(dependencies), source)(...Object.values(dependencies))
+    return { sounds, notifications, focuses, temporary, dispose: () => cleanups.forEach(fn => fn()) }
+}
+
+test('JMA UI expiry is silent, recovery compares content, and later official clear alerts once', async t => {
+    let now = tsunamiTime
+    const { store, settings } = setup({ useTimeStore: () => ({ getTimeStamp: () => now }) })
+    store.configureDataSources({ jmaTsunami: { wolfx: true } })
+    store.map = {}
+    settings.mainSettings.onTsunami = { sound: true, notification: true, focus: true }
+    settings.mainSettings.tempTsunamiDuration = 15
+    const ui = mountTsunamiScript('JmaTsunami', store, settings)
+    t.after(ui.dispose)
+    const report = () => {
+        const data = tsunamiReport()
+        data.report.title = '津波注意報・津波予報'
+        data.areas[0].level = 'advisory'
+        return data
+    }
+    store.setTsunamiMessage('jmaTsunami', report())
+    await nextTick()
+    assert.deepEqual(ui.sounds, ['tsunami-advisory-issue'])
+    now = tsunamiTime + 90000 + tsunami.tsunamiExpiryGrace + 1
+    store.updateJmaTsunamiDisplay()
+    await nextTick()
+    assert.equal(ui.sounds.length, 1)
+    const renewal = report()
+    renewal.validUntil = new Date(now + 90000).toISOString()
+    store.setTsunamiMessage('jmaTsunami', renewal)
+    await nextTick()
+    assert.equal(store.isActive.jmaTsunami, true)
+    assert.equal(ui.sounds.length, 1)
+    renewal.validUntil = new Date(now + 180000).toISOString()
+    renewal.areas[0].maxWave.text = '３ｍ以上'
+    store.setTsunamiMessage('jmaTsunami', renewal)
+    await nextTick()
+    assert.equal(ui.sounds.at(-1), 'tsunami-advisory-update')
+    now += 180000 + tsunami.tsunamiExpiryGrace + 1
+    store.updateJmaTsunamiDisplay()
+    await nextTick()
+    assert.equal(ui.sounds.length, 2)
+    store.setTsunamiMessage('jmaTsunami', { ...report(), status: 'cleared' })
+    await nextTick()
+    assert.equal(ui.sounds.at(-1), 'tsunami-advisory-clear')
+    store.setTsunamiMessage('jmaTsunami', { ...report(), status: 'expired' })
+    await nextTick()
+    assert.equal(ui.sounds.length, 3)
+    assert.equal(ui.notifications.length, 3)
+    assert.equal(ui.focuses.length, 3)
+    assert.equal(ui.temporary.length, 3)
+})
+
+test('NMEFC still alerts on newer reports even when forecast content is unchanged', async t => {
+    const { store, settings } = setup()
+    store.map = {}
+    settings.mainSettings.onTsunami = { sound: true, notification: true, focus: true }
+    settings.mainSettings.tempTsunamiDuration = 15
+    const ui = mountTsunamiScript('NmefcTsunami', store, settings)
+    t.after(ui.dispose)
+    const data = { reportId: 'cn', timeInfo: { issueTime: '2026-11-24 08:00:00' }, warningInfo: { level: '蓝色' }, forecasts: [] }
+    store.setTsunamiMessage('nmefcTsunami', data)
+    await nextTick()
+    data.timeInfo.issueTime = '2026-11-24 08:01:00'
+    store.setTsunamiMessage('nmefcTsunami', data)
+    await nextTick()
+    assert.deepEqual(ui.sounds, ['tsunami-forecast-issue', 'tsunami-forecast-update'])
+    data.timeInfo.issueTime = '2026-11-24 08:02:00'
+    data.warningInfo.level = '黄色'
+    store.setTsunamiMessage('nmefcTsunami', data)
+    await nextTick()
+    assert.equal(ui.sounds.at(-1), 'tsunami-advisory-issue')
+    data.timeInfo.issueTime = '2026-11-24 08:03:00'
+    data.warningInfo.level = '蓝色'
+    store.setTsunamiMessage('nmefcTsunami', data)
+    await nextTick()
+    assert.equal(ui.sounds.at(-1), 'tsunami-forecast-switch')
+    data.timeInfo.issueTime = '2026-11-24 08:04:00'
+    data.warningInfo.level = '解除'
+    store.setTsunamiMessage('nmefcTsunami', data)
+    await nextTick()
+    assert.equal(ui.sounds.at(-1), 'tsunami-forecast-clear')
+    data.timeInfo.issueTime = '2026-11-24 08:05:00'
+    store.setTsunamiMessage('nmefcTsunami', data)
+    await nextTick()
+    assert.equal(ui.sounds.length, 5)
+    assert.deepEqual(ui.notifications, [
+        ['现正发布海啸留意报', '请留意后续情报。', 'info'],
+        ['海啸留意报更新了', '请留意后续情报。', 'info'],
+        ['现正发布海啸注意报', '请从海岸边撤离！', 'caution'],
+        ['已切换到海啸留意报', '请留意后续情报。', 'info'],
+        ['海啸留意报已解除', '请留意后续情报。', 'info'],
+    ])
+    assert.equal(ui.focuses.length, 5)
+    assert.equal(ui.temporary.length, 5)
+})
+
+test('both tsunami sources keep scheduled warning audio after an official clear', async t => {
+    const timers = new Map()
+    let nextId = 0
+    t.mock.method(globalThis, 'setTimeout', (callback, delay) => {
+        const id = ++nextId
+        timers.set(id, { callback, delay })
+        return id
+    })
+    t.mock.method(globalThis, 'clearTimeout', id => timers.delete(id))
+    for (const [source, component, warning, clear] of [
+        ['jmaTsunami', 'JmaTsunami', tsunamiReport(), tsunamiReport({ status: 'cleared' })],
+        ['nmefcTsunami', 'NmefcTsunami',
+            { reportId: 'cn', timeInfo: { issueTime: '2026-11-24 08:00:00' }, warningInfo: { level: '橙色' }, forecasts: [] },
+            { reportId: 'cn', timeInfo: { issueTime: '2026-11-24 08:01:00' }, warningInfo: { level: '解除' }, forecasts: [] }],
+    ]) {
+        const { store, settings } = setup({ useTimeStore: () => ({ getTimeStamp: () => tsunamiTime }) })
+        store.configureDataSources({ jmaTsunami: { wolfx: true }, nmefcTsunami: { lipo: true } })
+        store.map = {}
+        settings.mainSettings.onTsunami = { sound: true, notification: true, focus: true }
+        settings.mainSettings.tempTsunamiDuration = 15
+        const ui = mountTsunamiScript(component, store, settings)
+        t.after(ui.dispose)
+        store.setTsunamiMessage(source, warning)
+        await nextTick()
+        assert.deepEqual(ui.sounds, [])
+        assert.deepEqual([...timers.values()].map(timer => timer.delay), [1500, 12000])
+        store.setTsunamiMessage(source, clear)
+        await nextTick()
+        assert.deepEqual(ui.sounds, ['tsunami-warning-clear'])
+        assert.equal(timers.size, 2)
+        for (const [id, timer] of [...timers]) {
+            timers.delete(id)
+            timer.callback()
+        }
+        assert.deepEqual(ui.sounds, ['tsunami-warning-clear', 'ews', 'tsunami-warning-issue'])
+        ui.dispose()
+    }
+})
+
+test('JMA coast visibility uses codes and local expiry leaves NMEFC coasts visible', () => {
+    let now = tsunamiTime
+    const { store } = setup({ useTimeStore: () => ({ getTimeStamp: () => now }) })
+    store.configureDataSources({ jmaTsunami: { wolfx: true } })
+    store.setTsunamiMessage('jmaTsunami', tsunamiReport())
+    store.tsunamiMessage.nmefcTsunami.warnArea = JSON.stringify([{ name: 'CN', className: 'yellow' }])
+    store.isActive.nmefcTsunami = true
+    const src = read('src/components/MainMapComponent.vue')
+    const start = src.indexOf('const jmaTsunamiWarnArea =')
+    const end = src.indexOf('const activeSources =', start)
+    const { jp, cn } = new Function('computed', 'statusStore', src.slice(start, end) + '\nreturn { jp: jmaTsunamiWarnArea, cn: nmefcTsunamiWarnArea }')(computed, store)
+    assert.equal(jp.value['772'].name, '奄美諸島・トカラ列島')
+    now = tsunamiTime + 90000 + tsunami.tsunamiExpiryGrace + 1
+    store.updateJmaTsunamiDisplay()
+    assert.deepEqual(jp.value, {})
+    assert.equal(cn.value.CN.className, 'yellow')
 })

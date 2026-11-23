@@ -9,19 +9,20 @@ import { onMounted } from 'vue';
 import { useStatusStore } from '@/stores/status';
 import Http from '@/classes/Http';
 import { stampToTime } from '@/utils/Utils';
+import { useTimeStore } from '@/stores/time';
 
 const statusStore = useStatusStore()
 setTimeout(() => {
     statusStore.disconnect()
 }, 500);
 
-const testJmaEew = true
-const testCwaEew = true
-const testIclEew = true
-const testJmaEqlist = true
-const testCencEqlist = true
+const testJmaEew = false
+const testCwaEew = false
+const testIclEew = false
+const testJmaEqlist = false
+const testCencEqlist = false
 const testJmaTsunami = true
-const testNmefcTsunami = true
+const testNmefcTsunami = false
 
 onMounted(async ()=>{
     if(testJmaEew){
@@ -861,19 +862,30 @@ onMounted(async ()=>{
     }
     if(testJmaTsunami){
         const source = 'jmaTsunami'
-        const limit = 20
-        const res = await Http.get(`https://api.p2pquake.net/v2/jma/tsunami?limit=${limit}&order=1&since_date=20240101`)
-        console.log(res);
-        let i = 0
-        const data = res[i]
-        statusStore.setTsunamiMessage(source, data)
-        setInterval(() => {
-            i++
-            if(i < limit) {
-                const data = res[i]
-                statusStore.setTsunamiMessage(source, data)
+        const samples = ['forecast_only', 'advisory', 'warning', 'major_warning', 'warning', 'advisory', 'forecast_only', 'cleared']
+        statusStore.sourceRoutes[source] = { wolfx: true }
+        const snapshots = await Promise.all(samples.map(name => Http.get('https://wolfx.jp/examples/jma_tsunami/' + name + '.json')))
+        let index = 0
+        const replay = () => {
+            const snapshot = snapshots[index++]
+            if (!snapshot?.report) return
+            const now = useTimeStore().getTimeStamp()
+            const shift = now - Date.parse(snapshot.report.time)
+            const translateTimes = value => {
+                if (Array.isArray(value)) return value.map(translateTimes)
+                if (!value || typeof value !== 'object') return value
+                return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+                    ['time', 'issuedAt', 'validUntil', 'highTide', 'targetTime'].includes(key) && typeof item === 'string' && Number.isFinite(Date.parse(item))
+                        ? new Date(Date.parse(item) + shift).toISOString() : translateTimes(item),
+                ]))
             }
-        }, 15000);
+            statusStore.setTsunamiMessage(source, translateTimes(snapshot))
+        }
+        replay()
+        const timer = setInterval(() => {
+            if (index >= snapshots.length) clearInterval(timer)
+            else replay()
+        }, 15000)
     }
     if(testNmefcTsunami){
         const source = 'nmefcTsunami'

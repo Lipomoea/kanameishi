@@ -9,9 +9,6 @@ export const eqUrls = {
   cencIr_http: "https://api.lipomoea.cn/cenc-ir",
   p2pquake_ws: ["wss://api.p2pquake.net/v2/ws"],
 };
-export const tsunamiUrls = {
-  jmaTsunami_http: "https://api.p2pquake.net/v2/history?codes=552&limit=1",
-};
 export const seisNetUrls = {
   nied: {
     stationList:
@@ -66,17 +63,21 @@ export const chimeUrls = {
     shindo5: "/sound/srev/shindo5.mp3",
     shindo6: "/sound/srev/shindo6.mp3",
     shindo7: "/sound/srev/shindo6.mp3",
-    tsunami1issue: "/sound/srev/tsunami1issue.mp3",
-    tsunami1update: "/sound/srev/tsunami1update.mp3",
-    tsunami1switch: "/sound/srev/tsunami1switch.mp3",
-    tsunami1cancel: "/sound/srev/tsunami1cancel.mp3",
-    tsunami2issue: "/sound/srev/tsunami2issue.mp3",
-    tsunami2update: "/sound/srev/tsunami2update.mp3",
-    tsunami2switch: "/sound/srev/tsunami2switch.mp3",
-    tsunami2cancel: "/sound/srev/tsunami2cancel.mp3",
-    tsunami3issue: "/sound/srev/tsunami3issue.mp3",
-    tsunami3update: "/sound/srev/tsunami3update.mp3",
-    tsunami3cancel: "/sound/srev/tsunami3cancel.mp3",
+    "tsunami-forecast-issue": "/sound/srev/tsunami-forecast-issue.mp3",
+    "tsunami-forecast-update": "/sound/srev/tsunami-forecast-update.mp3",
+    "tsunami-forecast-switch": "/sound/srev/tsunami-forecast-switch.mp3",
+    "tsunami-forecast-clear": "/sound/srev/tsunami-forecast-clear.mp3",
+    "tsunami-advisory-issue": "/sound/srev/tsunami-advisory-issue.mp3",
+    "tsunami-advisory-update": "/sound/srev/tsunami-advisory-update.mp3",
+    "tsunami-advisory-switch": "/sound/srev/tsunami-advisory-switch.mp3",
+    "tsunami-advisory-clear": "/sound/srev/tsunami-advisory-clear.mp3",
+    "tsunami-warning-issue": "/sound/srev/tsunami-warning-issue.mp3",
+    "tsunami-warning-update": "/sound/srev/tsunami-warning-update.mp3",
+    "tsunami-warning-switch": "/sound/srev/tsunami-warning-switch.mp3",
+    "tsunami-warning-clear": "/sound/srev/tsunami-warning-clear.mp3",
+    "tsunami-major-warning-issue": "/sound/srev/tsunami-major-warning-issue.mp3",
+    "tsunami-major-warning-update": "/sound/srev/tsunami-major-warning-update.mp3",
+    "tsunami-major-warning-clear": "/sound/srev/tsunami-major-warning-clear.mp3",
   },
   custom: {},
 };

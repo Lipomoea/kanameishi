@@ -147,14 +147,16 @@
                             <div class="bar" :class="statusStore.tsunamiMessage.nmefcTsunami.className">
                                 <div><WarnTriangleFilled style="width: 1em; height: 1em; margin-right: 0.25em;" />{{ statusStore.tsunamiMessage.nmefcTsunami.titleText }}</div>
                             </div>
-                            <div class="tsunami-info" v-if="cnTsunamiBaseMap">
+                            <div class="tsunami-info" :class="{ 'four-legends': statusStore.tsunamiMessage.nmefcTsunami.status >= 4 }" v-if="cnTsunamiBaseMap">
                                 <div class="background" :class="statusStore.tsunamiMessage.nmefcTsunami.className"></div>
-                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 3" class="legend tsunami-purple"></div>
-                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 3" class="text">大海啸警报</div>
-                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 2" class="legend tsunami-red"></div>
-                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 2" class="text">海啸警报</div>
-                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 1" class="legend tsunami-yellow"></div>
-                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 1" class="text">海啸注意报</div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 4" class="legend tsunami-purple"></div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 4" class="text">大海啸警报</div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 3" class="legend tsunami-red"></div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 3" class="text">海啸警报</div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 2" class="legend tsunami-yellow"></div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 2" class="text">海啸注意报</div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 1" class="legend tsunami-blue"></div>
+                                <div v-show="statusStore.tsunamiMessage.nmefcTsunami.status >= 1" class="text">轻微海面变动</div>
                             </div>
                             <div class="tsunami-info" v-else>
                                 <div class="background" :class="statusStore.tsunamiMessage.nmefcTsunami.className"></div>
@@ -168,14 +170,16 @@
                             <div class="bar" :class="statusStore.tsunamiMessage.jmaTsunami.className">
                                 <div><WarnTriangleFilled style="width: 1em; height: 1em; margin-right: 0.25em;" />{{ statusStore.tsunamiMessage.jmaTsunami.titleText }}</div>
                             </div>
-                            <div class="tsunami-info">
+                            <div class="tsunami-info" :class="{ 'four-legends': statusStore.tsunamiMessage.jmaTsunami.status >= 4 }">
                                 <div class="background" :class="statusStore.tsunamiMessage.jmaTsunami.className"></div>
-                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 3" class="legend tsunami-purple"></div>
-                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 3" class="text">大津波警報</div>
-                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 2" class="legend tsunami-red"></div>
-                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 2" class="text">津波警報</div>
-                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 1" class="legend tsunami-yellow"></div>
-                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 1" class="text">津波注意報</div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 4" class="legend tsunami-purple"></div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 4" class="text">大津波警報</div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 3" class="legend tsunami-red"></div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 3" class="text">津波警報</div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 2" class="legend tsunami-yellow"></div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 2" class="text">津波注意報</div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 1" class="legend tsunami-blue"></div>
+                                <div v-show="statusStore.tsunamiMessage.jmaTsunami.status >= 1" class="text">若干の海面変動</div>
                             </div>
                         </div>
                     </div>
@@ -583,14 +587,16 @@ watch([
     else if(layout !== previousLayout) infoPageCounter.value = 0
 })
 const jmaTsunamiWarnArea = computed(() => {
+    if (!statusStore.isActive.jmaTsunami) return {}
     const warnArea = JSON.parse(statusStore.tsunamiMessage.jmaTsunami.warnArea)
     const jmaTsunamiWarnArea = {}
     warnArea.forEach(item => {
-        jmaTsunamiWarnArea[item.name] = item
+        if (item.level > 0) jmaTsunamiWarnArea[item.code] = item
     })
     return jmaTsunamiWarnArea
 })
 const nmefcTsunamiWarnArea = computed(() => {
+    if (!statusStore.isActive.nmefcTsunami) return {}
     const warnArea = JSON.parse(statusStore.tsunamiMessage.nmefcTsunami.warnArea)
     const nmefcTsunamiWarnArea = {}
     warnArea.forEach(item => {
@@ -1202,7 +1208,7 @@ const loadMaps = async (retries = 0) => {
             })
             trackMapLoadWatch(watch(jmaTsunamiWarnArea, newVal => {
                 jpTsunamiBaseMap.setStyle(feature => ({
-                    color: tsunamiColors[newVal[feature.properties.name]?.className] || tsunamiBaseMapDefaultStroke
+                    color: tsunamiColors[newVal[String(feature.properties.code)]?.className] || tsunamiBaseMapDefaultStroke
                 }))
                 smartSetView()
             }, { deep: true, immediate: true }))
@@ -1291,7 +1297,7 @@ const setView = (force = false) => {
                 if(statusStore.isActive.jmaTsunami) {
                     bounds.extend(collectStrokedAreaBounds(jpTsunamiBaseMap, tsunamiBaseMapDefaultStroke))
                 }
-                if(!bounds.isValid()) {
+                if(!bounds.isValid() && statusStore.tsunamiMessage.jmaTsunami.status === 0) {
                     extendLayerBounds(bounds, jpTsunamiBaseMap)
                 }
             }
@@ -1299,7 +1305,7 @@ const setView = (force = false) => {
                 if(statusStore.isActive.nmefcTsunami) {
                     bounds.extend(collectStrokedAreaBounds(cnTsunamiBaseMap, tsunamiBaseMapDefaultStroke))
                 }
-                if(!bounds.isValid()) {
+                if(!bounds.isValid() && statusStore.tsunamiMessage.nmefcTsunami.status === 0) {
                     extendLayerBounds(bounds, cnTsunamiBaseMap)
                 }
             }
@@ -1830,6 +1836,7 @@ onUnmounted(() => {
                         }
                     }
                     .tsunami-info {
+                        position: relative;
                         width: 415px;
                         height: 100px;
                         padding: 1px 0;
@@ -1845,6 +1852,7 @@ onUnmounted(() => {
                         }
                         .background {
                             position: absolute;
+                            inset: 0;
                             width: 100%;
                             height: 100%;
                             z-index: 0;
@@ -1859,6 +1867,20 @@ onUnmounted(() => {
                             justify-self: start;
                             text-align: left;
                             font-size: 18px;
+                        }
+                        &.four-legends {
+                            grid-template-columns: minmax(44px, 1fr) max-content minmax(44px, 1fr) max-content;
+                            column-gap: 12px;
+                            padding: 1px 14px;
+                            .legend {
+                                width: 44px;
+                            }
+                            .text {
+                                white-space: nowrap;
+                            }
+                        }
+                        .tsunami-blue {
+                            background-color: var(--tsunami-blue);
                         }
                         .tsunami-purple {
                             background-color: var(--tsunami-purple);

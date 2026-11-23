@@ -6,6 +6,7 @@
       </keep-alive>
     </RouterView>
   </div>
+  <VersionNotification :last-version="lastVersion" />
 </template>
 
 <script setup>
@@ -22,12 +23,18 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import Http from './classes/Http';
 import { APP_TITLE } from '@/utils/AppInfo';
+import VersionNotification, { migrateVersionSettings } from './components/VersionNotification.vue';
 
 const timeStore = useTimeStore()
 const statusStore = useStatusStore()
 const settingsStore = useSettingsStore()
 const accessStore = useAccessStore()
 const inTauri = isTauri()
+const lastVersion = localStorage.getItem('lastVersion') || ''
+
+watch(() => timeStore.currentTimeStamp, () => {
+  statusStore.updateJmaTsunamiDisplay(timeStore.getTimeStamp())
+})
 
 const container = ref()
 const TRAY_GAME_MODE_EVENT = 'tray-game-mode-changed'
@@ -84,7 +91,13 @@ const history2Eqlist = {
 
 onBeforeMount(async () => {
   document.title = APP_TITLE
-  settingsStore.setMainSettings(localStorage.getItem('mainSettings'))
+  // 先保留并迁移旧字段，再恢复设置和连接数据源；具体版本规则集中在 VersionNotification.vue。
+  const savedMainSettings = localStorage.getItem('mainSettings')
+  const migratedMainSettings = migrateVersionSettings(savedMainSettings, lastVersion)
+  if(migratedMainSettings !== savedMainSettings) {
+    statusStore.setLocalStorageItem('mainSettings', migratedMainSettings)
+  }
+  settingsStore.setMainSettings(migratedMainSettings)
   accessStore.setAccessSettings(localStorage.getItem('accessSettings'))
   settingsStore.setAdvancedSettings(localStorage.getItem('advancedSettings'))
   settingsStore.resetUnauthorizedFeatureSettings()
