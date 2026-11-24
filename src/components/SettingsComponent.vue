@@ -2269,7 +2269,8 @@ ul {
             justify-content: center;
             flex-wrap: wrap;
             .el-button {
-                width: 150px;
+                min-width: 150px;
+                flex-shrink: 0;
                 margin: 0;
             }
         }
