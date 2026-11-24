@@ -3,8 +3,12 @@
         width="min(560px, calc(100vw - 32px))" :show-close="false" :close-on-click-modal="false"
         append-to-body align-center>
         <div class="version-notification">
-            <p v-if="showTsunamiMigration">由于“日本気象庁: 津波情報”功能调整，已为您自动迁移“数据源管理”-“日本気象庁: 津波情報”功能设置。</p>
-            <p v-if="showTsunamiAudioNotice">由于海啸信息相关功能调整，请您调整海啸相关自定义音频文件名称。</p>
+            <p v-if="!lastVersion">如果这是您第一次使用本应用程序，请在右上角菜单点击“<el-icon class="settings-icon" aria-label="设置"><Setting /></el-icon>”，阅读“帮助&关于”并完成应用设置。</p>
+            <p v-else-if="versionOrder > 0">您已更新至v{{ APP_VERSION }}。</p>
+            <ul v-if="showTsunamiMigration || showTsunamiAudioNotice">
+                <li v-if="showTsunamiMigration">由于“日本気象庁: 津波情報”功能调整，已为您自动迁移“数据源管理”-“日本気象庁: 津波情報”功能设置。</li>
+                <li v-if="showTsunamiAudioNotice">由于海啸信息相关功能调整，请您调整海啸相关自定义音频文件名称。</li>
+            </ul>
         </div>
         <template #footer>
             <el-button type="primary" @click="visible = false">知道了</el-button>
@@ -17,9 +21,10 @@ import { APP_TITLE, APP_VERSION } from '@/utils/AppInfo'
 import { compareVersions } from '@/utils/Version'
 import { parseSettings } from '@/utils/SettingsRestore'
 
-// 仅在“旧版本 < 迁移版本 <= 当前版本”时执行；缺失或无效的旧版本不参与迁移。
+// 在“旧版本 < 迁移版本 <= 当前版本”时执行；没有版本记录也视为尚未迁移。
+// 首次引入 lastVersion 时，旧用户同样没有记录，不能据此跳过迁移；非空但无效的版本仍不参与。
 // 使用版本比较而非字符串比较，确保跨版本升级和预发布版本也能正确判断。
-export const isUpgradeToVersion = (lastVersion, version) => compareVersions(lastVersion, version) === -1
+export const isUpgradeToVersion = (lastVersion, version) => (!lastVersion || compareVersions(lastVersion, version) === -1)
     && compareVersions(APP_VERSION, version) >= 0
 
 // App.vue 在恢复设置、连接数据源前调用此函数，否则旧字段会先被设置恢复逻辑过滤。
@@ -46,6 +51,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { exists, readDir } from '@tauri-apps/plugin-fs'
+import { Setting } from '@element-plus/icons-vue'
 import { useStatusStore } from '@/stores/status'
 
 const statusStore = useStatusStore()
@@ -92,7 +98,15 @@ onBeforeUnmount(() => { disposed = true })
     font-size: 16px;
     line-height: 1.7;
 }
-.version-notification p + p {
+.version-notification ul {
+    padding-left: 1.5em;
+    list-style-type: disc;
+}
+.version-notification p + ul,
+.version-notification li + li {
     margin-top: 12px;
+}
+.settings-icon {
+    vertical-align: -0.15em;
 }
 </style>

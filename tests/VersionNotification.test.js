@@ -78,18 +78,38 @@ test('missing or malformed versions cannot be compared', () => {
     }
 })
 
-test('no version record shows only the generic notice and skips migration and native audio checks', async () => {
+test('no version record still migrates legacy settings and checks custom tsunami audio', async () => {
     const saved = '{"dataSources":{"jmaTsunami":{"p2pquake":true}},"onTsunami":{"sound":true}}'
     const storage = new Map([['mainSettings', saved], ['SHOW_ABOUT_FLG', '20260313.00']])
-    const state = await launch(storage, '2.12.0', { desktop: true })
+    const state = await launch(storage, '2.12.0', {
+        desktop: true, entries: [{ name: 'tsunami1issue.mp3', isFile: true }],
+    })
     assert.equal(state.lastVersion, '')
     assert.equal(state.visible.value, true)
-    assert.equal(state.showTsunamiMigration, false)
-    assert.equal(state.showTsunamiAudioNotice.value, false)
-    assert.deepEqual(state.fsCalls, [])
+    assert.equal(state.showTsunamiMigration, true)
+    assert.equal(state.showTsunamiAudioNotice.value, true)
+    assert.deepEqual(state.fsCalls, ['appDataDir', ['exists', '/data/audio'], ['readDir', '/data/audio']])
     assert.equal(storage.get('lastVersion'), '2.12.0')
-    assert.equal(storage.get('mainSettings'), saved)
-    assert.equal((await launch(storage)).visible.value, false)
+    assert.deepEqual(state.settingsStore.mainSettings.dataSources.jmaTsunami, { wolfx: true })
+    assert.deepEqual(JSON.parse(storage.get('mainSettings')), {
+        dataSources: { jmaTsunami: { wolfx: true } }, onTsunami: { sound: true },
+    })
+    const next = await launch(storage, '2.12.0', { desktop: true })
+    assert.equal(next.visible.value, false)
+    assert.equal(next.showTsunamiMigration, false)
+    assert.deepEqual(next.fsCalls, [])
+})
+
+test('a fresh install has no settings to migrate and keeps the default tsunami switch', async () => {
+    const storage = new Map()
+    const state = await launch(storage, '2.12.0', { desktop: true, audioDirectoryExists: false })
+    assert.equal(state.lastVersion, '')
+    assert.equal(state.visible.value, true)
+    assert.equal(state.showTsunamiMigration, true)
+    assert.equal(state.showTsunamiAudioNotice.value, false)
+    assert.deepEqual(state.settingsStore.mainSettings.dataSources.jmaTsunami, { wolfx: false })
+    assert.equal(storage.has('mainSettings'), false)
+    assert.equal(storage.get('lastVersion'), '2.12.0')
 })
 
 test('an upgrade retains the previous version for custom content after persisting the current version', async () => {
@@ -135,9 +155,10 @@ test('a pending mount does not repopulate storage or open a notice during applic
 })
 
 test('the 2.12.0 migration preserves enabled and disabled tsunami settings before restoration', async () => {
-    for(const enabled of [true, false]) {
+    for(const lastVersion of ['', '2.11.1']) for(const enabled of [true, false]) {
         const saved = { dataSources: { jmaTsunami: { p2pquake: enabled }, jmaEqlist: { p2pquake: true } }, masterVolume: 42 }
-        const storage = new Map([['lastVersion', '2.11.1'], ['mainSettings', JSON.stringify(saved)]])
+        const storage = new Map([['mainSettings', JSON.stringify(saved)]])
+        if(lastVersion) storage.set('lastVersion', lastVersion)
         const state = await launch(storage)
         assert.deepEqual(state.settingsStore.mainSettings.dataSources.jmaTsunami, { wolfx: enabled })
         assert.deepEqual(JSON.parse(storage.get('mainSettings')), {
