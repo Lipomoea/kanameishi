@@ -22,7 +22,8 @@ export class CanvasLayer extends L.Layer {
         this.createCanvas()
         map.on('zoomstart', this.handleZoomStart, this)
         map.on('zoomend', this.handleZoomEnd, this)
-        map.on('moveend resize viewreset', this.reset, this)
+        map.on('moveend resize', this.reset, this)
+        map.on('viewreset', this.handleViewReset, this)
         map.on('zoomanim', this.animateZoom, this)
         this.reset()
     }
@@ -30,7 +31,8 @@ export class CanvasLayer extends L.Layer {
     onRemove() {
         if(this.map) this.map.off('zoomstart', this.handleZoomStart, this)
         if(this.map) this.map.off('zoomend', this.handleZoomEnd, this)
-        if(this.map) this.map.off('moveend resize viewreset', this.reset, this)
+        if(this.map) this.map.off('moveend resize', this.reset, this)
+        if(this.map) this.map.off('viewreset', this.handleViewReset, this)
         if(this.map) this.map.off('zoomanim', this.animateZoom, this)
         if(this.resetFrame) cancelAnimationFrame(this.resetFrame)
         if(this.pendingRedrawFrame) cancelAnimationFrame(this.pendingRedrawFrame)
@@ -65,6 +67,14 @@ export class CanvasLayer extends L.Layer {
             this.performReset()
         })
         return this
+    }
+
+    handleViewReset() {
+        if(this.resetFrame !== null) {
+            cancelAnimationFrame(this.resetFrame)
+            this.resetFrame = null
+        }
+        this.performReset()
     }
 
     performReset() {
