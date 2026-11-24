@@ -328,11 +328,15 @@ export class PalertStation {
             if(!isValid) return
             const recentData = this.recentData
             let backgroundMaxPga = 0
+            let missingCount = 0
             for(let offset = 1; offset <= 8; offset++) {
                 const before = recentData[offset]
                 if(!before || before.timestamp !== timestamp - offset * 1000 ||
                     !Number.isFinite(before.level) || before.level < 0 ||
-                    !Number.isFinite(before.pga) || before.pga < 0) return
+                    !Number.isFinite(before.pga) || before.pga < 0) {
+                    if(offset <= 2 || ++missingCount > 1) return
+                    continue
+                }
                 if(offset >= 2) backgroundMaxPga = Math.max(backgroundMaxPga, before.pga)
             }
             const previous = recentData[1]
