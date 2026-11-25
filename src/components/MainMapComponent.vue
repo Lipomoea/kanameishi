@@ -497,6 +497,7 @@ const currentEqlistInfoPage = computed(() => tempEqlistInfoPage.value ?? Math.fl
 const currentEqlistInfoItems = computed(() => displayEqlistList.value.slice(eventsPerPage.value * currentEqlistInfoPage.value, eventsPerPage.value * (currentEqlistInfoPage.value + 1)))
 const handleManual = ()=>{
     isAutoZoom.value = false
+    clearViewTarget()
     clearTimeout(autoZoomTimer)
     autoZoomTimer = setTimeout(() => {
         handleHome()
@@ -1286,8 +1287,51 @@ const setMapHeight = (height) => {
 }
 let pendingSetView = false
 let largeZoomingTimer
+let viewTask = null
+const isSameView = (view, target) => {
+    const err = 1 / 2 ** target.zoom
+    return view.zoom === target.zoom &&
+        Math.abs(view.center.lat - target.center.lat) < err &&
+        Math.abs(view.center.lng - target.center.lng) < err
+}
+const clearViewTarget = () => {
+    if(!viewTask) return
+    clearTimeout(viewTask.endTimer)
+    for(const [event, handler] of Object.entries(viewTask.handlers)) viewTask.map.off(event, handler)
+    viewTask = null
+}
+const applyMapView = (center, zoom, animate) => {
+    clearViewTarget()
+    const task = { map, center: { lat: center.lat, lng: center.lng }, zoom, endTimer: null }
+    const finish = () => { if(viewTask === task) clearViewTarget() }
+    const cancelEnd = () => clearTimeout(task.endTimer)
+    let zoomMoveEnd = false
+    task.handlers = zoom !== map.getZoom() ? { zoomend: finish } : {
+        // A stopped older pan emits moveend before the new pan's movestart.
+        movestart: cancelEnd,
+        // invalidateSize emits resize immediately after its moveend.
+        resize: cancelEnd,
+        zoomend: () => { zoomMoveEnd = true },
+        moveend: () => {
+            // An overlapping older zoom also emits moveend after zoomend.
+            if(zoomMoveEnd) { zoomMoveEnd = false; return }
+            cancelEnd()
+            task.endTimer = setTimeout(finish, 0)
+        },
+    }
+    viewTask = task
+    for(const [event, handler] of Object.entries(task.handlers)) map.on(event, handler)
+    try {
+        map.setView(center, zoom, { animate })
+        if(!animate) finish()
+    }
+    catch(error) {
+        finish()
+        throw error
+    }
+}
 const setView = (force = false) => {
-    if(!map) return
+    if(!map || isDisposed) return
     if(document.visibilityState === 'visible') {
         const bounds = L.latLngBounds([])
         let stableMode = false
@@ -1417,23 +1461,23 @@ const setView = (force = false) => {
         const currZoom = map.getZoom()
         if(!force && stableMode && currZoom == targetZoom && map.getBounds().contains(bounds))
             return
-        const err = 1 / 2 ** targetZoom
-        if(currZoom != targetZoom || Math.abs(currCenter.lat - targetCenter.lat) >= err || Math.abs(currCenter.lng - targetCenter.lng) >= err) {
-            if(Math.abs(currZoom - targetZoom) > 4) {
-                clearTimeout(largeZoomingTimer)
-                if(map.hasLayer(eewBaseGroup)) map.removeLayer(eewBaseGroup)
-                if(map.hasLayer(tsunamiBaseGroup)) map.removeLayer(tsunamiBaseGroup)
-                map.once('moveend', () => {
-                    largeZoomingTimer = setTimeout(() => {
-                        if(map && eewBaseGroup && !map.hasLayer(eewBaseGroup)) eewBaseGroup.addTo(map)
-                        if(map && tsunamiBaseGroup && !map.hasLayer(tsunamiBaseGroup)) tsunamiBaseGroup.addTo(map)
-                    }, 0);
-                })
-                map.setView(targetCenter, targetZoom, { animate: false })
-            }
-            else {
-                map.setView(targetCenter, targetZoom, { animate: true })
-            }
+        const target = { center: targetCenter, zoom: targetZoom }
+        if(viewTask && isSameView(viewTask, target)) return
+        if(isSameView({ center: currCenter, zoom: currZoom }, target)) return
+        if(Math.abs(currZoom - targetZoom) > 4) {
+            clearTimeout(largeZoomingTimer)
+            if(map.hasLayer(eewBaseGroup)) map.removeLayer(eewBaseGroup)
+            if(map.hasLayer(tsunamiBaseGroup)) map.removeLayer(tsunamiBaseGroup)
+            map.once('moveend', () => {
+                largeZoomingTimer = setTimeout(() => {
+                    if(map && eewBaseGroup && !map.hasLayer(eewBaseGroup)) eewBaseGroup.addTo(map)
+                    if(map && tsunamiBaseGroup && !map.hasLayer(tsunamiBaseGroup)) tsunamiBaseGroup.addTo(map)
+                }, 0);
+            })
+            applyMapView(targetCenter, targetZoom, false)
+        }
+        else {
+            applyMapView(targetCenter, targetZoom, true)
         }
     }
     else {
@@ -1619,6 +1663,7 @@ const eewInfoList = computed(()=>{
 })
 onBeforeUnmount(()=>{
     isDisposed = true
+    clearViewTarget()
     clearInterval(mainInterval)
     clearInterval(terminatorInterval)
     clearInterval(autoZoomInterval)

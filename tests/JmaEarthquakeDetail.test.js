@@ -159,9 +159,9 @@ test('JMA stations follow CENC history lifecycle: zoom, stacked markers, replace
     const marker = first.stations[0].marker
     assert.equal(marker.options.pane, 'intReportStationPane5')
     assert.equal(marker.options.icon, '8:5-')
-    assert.match(marker.tooltip, /观测震度: 5弱/)
+    assert.match(marker.tooltip, /観測震度: 5弱/)
     assert.match(marker.tooltip, /芦北町芦北＊/)
-    assert.match(marker.tooltip, /地区: 熊本県天草・芦北/)
+    assert.match(marker.tooltip, /地域: 熊本県天草・芦北/)
     zoom(12)
     assert.equal(marker.options.icon, '10:5-')
     first.setJmaDetail(detail)
