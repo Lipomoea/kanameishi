@@ -85,7 +85,7 @@ export class EewEvent {
         this.maxRadius1 = 2000
         this.maxRadius2 = 10000
         this.maxWaveRadius = 2000
-        this.gradId = `sWaveGradient-${this.eqMessage.id}`
+        this.gradId = `sWaveGradient-${this.eqMessage.source}-${this.eqMessage.id}`
         this.handleTempEqlists = handleTempEqlists
         this.smartSetView = smartSetView
     }

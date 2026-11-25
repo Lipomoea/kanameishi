@@ -99,7 +99,7 @@ watch(() => statusStore.seisNetReplayDelay, newVal => {
     }
     resetAutoStopTimer()
 })
-const isReplaying = (item) => replayState.itemId == item.id
+const isReplaying = (item) => replayState.itemId == historyKey(item)
 const toggleReplay = (item) => {
     if(isReplaying(item)) {
         stopReplay()
@@ -113,7 +113,7 @@ const toggleReplay = (item) => {
 const startReplay = (item) => {
     const passedTime = exactRound(Math.max(calcPassedTime(item.originTime, item.timeZone) / 60000 + replayLeadSeconds / 60, 0), 2)
     statusStore.seisNetReplayDelay = passedTime
-    replayState.itemId = item.id
+    replayState.itemId = historyKey(item)
     if (settingsStore.advancedSettings.mockOnReplay && settingsStore.advancedSettings.mockEew
         && hasHypocenter(item) && Number.isFinite(item.magnitude) && Number.isFinite(item.depth)) {
         createMockEew(item)
