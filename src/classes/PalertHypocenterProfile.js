@@ -49,9 +49,9 @@ export const palertHypocenterProfile = {
 
     getPickBaseWeight({ maxLevel }) {
         if(maxLevel === 6) return 0.1
-        if(maxLevel === 7) return 0.4
-        if(maxLevel === 8) return 1.6
-        return Number.isFinite(maxLevel) && maxLevel >= 8 ? Math.min(2 + (maxLevel - 8) * 0.4, 4) : 0
+        if(maxLevel === 7) return 0.3
+        if(maxLevel === 8) return 0.8
+        return Number.isFinite(maxLevel) && maxLevel >= 8 ? Math.min(0.2 * (maxLevel - 4), 2) : 0
     },
 
     isPenaltyReferencePick(pick) {

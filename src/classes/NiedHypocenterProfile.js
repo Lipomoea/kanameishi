@@ -47,7 +47,7 @@ export const niedHypocenterProfile = {
         largeClusterMatchResidual: 7500,
         largeClusterMatchStationCount: 50,
         defaultWaveCountPenaltyConfig: { thresholdRatio: 3, maxPenalty: 1 },
-        unexplainedPickPenaltyWeight: 1,
+        unexplainedPickPenaltyWeight: 3,
         inheritedOutlierFilterStages: [
             { level: 3, minCount: 100, minRemainingInheritedRatio: 0.9, ratio: 2, minResidual: 3000, maxMeanResidual: 1500, waveCountPenalty: { thresholdRatio: 4, maxPenalty: 0 } },
             { level: 2, minCount: 30, minRemainingInheritedRatio: 0.8, ratio: 2.5, minResidual: 4000, maxMeanResidual: 2000, waveCountPenalty: { thresholdRatio: 3.5, maxPenalty: 0.5 } },
