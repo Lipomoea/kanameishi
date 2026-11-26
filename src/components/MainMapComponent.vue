@@ -51,7 +51,7 @@
                                 class="shindo-bar"
                                 :class="getCountdownBarClass(event)"
                                 :style="getCountdownProgressStyle(event)"
-                                @dblclick="toggleCountdownWave(event)"
+                                @dblclick="cycleCountdownDisplay(event)"
                             >
                                 <template v-if="isWaveProgress">
                                     <template v-if="canShowWaveProgress(event)">
@@ -616,7 +616,11 @@ watch(activeSources, newVal => {
 const isWaveProgress = computed(() => settingsStore.mainSettings.countdownBarStyle == 'wave-progress')
 const canShowWaveProgress = event => event.countdown >= 0 && !event.eqMessage.isCanceled
 const getCountdownText = event => {
-    const countdown = !isWaveProgress.value && event.showPCountdown ? event.pCountdown : event.countdown
+    if(event.countdownDisplayMode == 'distance') {
+        const distance = event.userDist
+        return Number.isFinite(distance) && distance >= 0 ? `${distance.toFixed(distance < 1000 ? 1 : 0)} km` : '- km'
+    }
+    const countdown = !isWaveProgress.value && event.countdownDisplayMode == 'p' ? event.pCountdown : event.countdown
     if(countdown == 0) return '已抵达'
     const text = event.countdown == -1 ? '-' : Math.ceil(countdown)
     return `${text}秒`
@@ -624,14 +628,16 @@ const getCountdownText = event => {
 const getCountdownBarClass = event => {
     const unavailable = event.countdown < 0 || event.eqMessage.isCanceled
     if(isWaveProgress.value) return unavailable ? 'gray' : 'wave-progress'
-    if(event.showPCountdown) return 'blue'
+    if(event.countdownDisplayMode == 'p') return 'blue'
     if(unavailable) return 'gray'
     if(event.countdown <= 15) return 'red'
     if(event.countdown <= 60) return 'orange'
     return 'yellow'
 }
-const toggleCountdownWave = event => {
-    if(!isWaveProgress.value) event.showPCountdown = !event.showPCountdown
+const cycleCountdownDisplay = event => {
+    const modes = isWaveProgress.value ? ['s', 'distance'] : ['s', 'p', 'distance']
+    const currentMode = isWaveProgress.value && event.countdownDisplayMode == 'p' ? 's' : event.countdownDisplayMode
+    event.countdownDisplayMode = modes[(modes.indexOf(currentMode) + 1) % modes.length]
 }
 const getWaveProgress = (reachTime, countdown) => {
     if(!Number.isFinite(reachTime) || reachTime < 0 || !Number.isFinite(countdown) || countdown < 0) return 0
@@ -1942,6 +1948,7 @@ onUnmounted(() => {
                     pointer-events: auto;
                     position: relative;
                     overflow: hidden;
+                    white-space: nowrap;
                     &.wave-progress {
                         background-color: var(--gray);
                     }

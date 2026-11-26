@@ -72,7 +72,7 @@ export class EewEvent {
         this.isIntense = false
         this.mute = false
         this.showMenu = false
-        this.showPCountdown = false
+        this.countdownDisplayMode = 's'
         this.flags = {
             firstSound: false,
             cautionSound: false,
